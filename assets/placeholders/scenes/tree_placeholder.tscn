@@ -1,0 +1,33 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://resource/scripts/resource_node.gd" id="1"]
+
+[sub_resource type="CylinderMesh" id="1"]
+top_radius = 0.2
+bottom_radius = 0.26
+height = 2.2
+
+[sub_resource type="SphereMesh" id="2"]
+radius = 1.0
+height = 2.0
+
+[sub_resource type="StandardMaterial3D" id="3"]
+albedo_color = Color(0.435294, 0.286275, 0.117647, 1)
+
+[sub_resource type="StandardMaterial3D" id="4"]
+albedo_color = Color(0.14902, 0.607843, 0.219608, 1)
+roughness = 0.8
+
+[node name="Tree" type="Node3D"]
+script = ExtResource("1")
+item_id = "wood"
+amount = 3
+
+[node name="Trunk" type="MeshInstance3D" parent="."]
+mesh = SubResource("1")
+surface_material_override/0 = SubResource("3")
+
+[node name="Leaves" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+mesh = SubResource("2")
+surface_material_override/0 = SubResource("4")

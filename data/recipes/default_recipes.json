@@ -1,0 +1,24 @@
+{
+  "recipes": {
+    "axe": {
+      "requires": {
+        "stone": 3,
+        "wood": 2
+      },
+      "output": {
+        "item_id": "axe",
+        "amount": 1
+      }
+    },
+    "pickaxe": {
+      "requires": {
+        "stone": 3,
+        "wood": 2
+      },
+      "output": {
+        "item_id": "pickaxe",
+        "amount": 1
+      }
+    }
+  }
+}

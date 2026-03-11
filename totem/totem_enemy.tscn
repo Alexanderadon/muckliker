@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://totem/totem_enemy.gd" id="1_4vf8l"]
+
+[node name="TotemEnemy" type="CharacterBody3D"]
+script = ExtResource("1_4vf8l")
+
+[node name="NavigationAgent3D" type="NavigationAgent3D" parent="."]

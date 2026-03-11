@@ -1,0 +1,11 @@
+{
+  "items": [
+    {"id": "stick", "display_name": "Stick", "item_type": "resource", "stack": 99, "ui_color": "#7A4E2D"},
+    {"id": "wood", "display_name": "Wood", "item_type": "resource", "stack": 99, "ui_color": "#8B5A2B"},
+    {"id": "stone", "display_name": "Stone", "item_type": "resource", "stack": 99, "ui_color": "#8A8D91"},
+    {"id": "axe", "display_name": "Axe", "item_type": "tool", "tool_type": "axe", "stack": 1, "ui_color": "#5A3B1E"},
+    {"id": "pickaxe", "display_name": "Pickaxe", "item_type": "tool", "tool_type": "pickaxe", "stack": 1, "ui_color": "#4D545D"},
+    {"id": "meat", "display_name": "Meat", "item_type": "resource", "stack": 20, "ui_color": "#A35555"},
+    {"id": "essence", "display_name": "Essence", "item_type": "resource", "stack": 99, "ui_color": "#C79C40"}
+  ]
+}

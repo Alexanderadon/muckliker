@@ -1,0 +1,50 @@
+{
+  "tree": {
+    "required_tool": "axe",
+    "drop_item_id": "wood",
+    "drop_amount": 3,
+    "drop_min_amount": 3,
+    "drop_max_amount": 12,
+    "drop_table": [
+      { "item_id": "wood", "amount": 3 }
+    ],
+    "max_hp": 3.0,
+    "mesh_kind": "cylinder",
+    "radius": 0.42,
+    "height": 2.3,
+    "offset_y": 1.15,
+    "color": "#33AB42"
+  },
+  "rock": {
+    "required_tool": "pickaxe",
+    "drop_item_id": "stone",
+    "drop_amount": 3,
+    "drop_min_amount": 3,
+    "drop_max_amount": 12,
+    "drop_table": [
+      { "item_id": "stone", "amount": 3 }
+    ],
+    "max_hp": 4.0,
+    "mesh_kind": "sphere",
+    "radius": 0.62,
+    "height": 1.24,
+    "offset_y": 0.62,
+    "color": "#878F9C"
+  },
+  "big_rock": {
+    "required_tool": "pickaxe",
+    "drop_item_id": "stone",
+    "drop_amount": 3,
+    "drop_min_amount": 3,
+    "drop_max_amount": 12,
+    "drop_table": [
+      { "item_id": "stone", "amount": 3 }
+    ],
+    "max_hp": 8.0,
+    "mesh_kind": "sphere",
+    "radius": 1.0,
+    "height": 2.0,
+    "offset_y": 1.0,
+    "color": "#767D8C"
+  }
+}

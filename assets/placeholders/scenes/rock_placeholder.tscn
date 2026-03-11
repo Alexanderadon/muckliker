@@ -1,0 +1,20 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://resource/scripts/resource_node.gd" id="1"]
+
+[sub_resource type="SphereMesh" id="1"]
+radius = 0.75
+height = 1.5
+
+[sub_resource type="StandardMaterial3D" id="2"]
+albedo_color = Color(0.509804, 0.54902, 0.588235, 1)
+roughness = 0.95
+
+[node name="Rock" type="Node3D"]
+script = ExtResource("1")
+item_id = "stone"
+amount = 2
+
+[node name="Visual" type="MeshInstance3D" parent="."]
+mesh = SubResource("1")
+surface_material_override/0 = SubResource("2")

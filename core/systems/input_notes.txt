@@ -1,0 +1,5 @@
+﻿# Input map hints:
+# move_left=A
+# move_right=D
+# move_forward=W
+# move_back=S

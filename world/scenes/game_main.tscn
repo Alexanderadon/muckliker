@@ -1,0 +1,21 @@
+[gd_scene format=3 uid="uid://cqsd7hnndu22u"]
+
+[ext_resource type="Script" uid="uid://bxvjund7ondqp" path="res://world/systems/world_system.gd" id="1_qo2q6"]
+[ext_resource type="Script" uid="uid://cysc4owh0wkvs" path="res://player/systems/player_system.gd" id="2_4mro7"]
+
+[node name="GameMain" type="Node3D" unique_id=580611619]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1225658721]
+transform = Transform3D(0.9553365, -0.23148894, 0.18369831, 0, 0.62161, 0.7833269, -0.29552022, -0.7483408, 0.59384674, 0, 0, 0)
+
+[node name="WorldRoot" type="Node3D" parent="." unique_id=53539069]
+script = ExtResource("1_qo2q6")
+
+[node name="PlayerRoot" type="CharacterBody3D" parent="." unique_id=853511324]
+script = ExtResource("2_4mro7")
+
+[node name="PlayerHead" type="Node3D" parent="PlayerRoot" unique_id=574760066]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+
+[node name="Camera3D" type="Camera3D" parent="PlayerRoot/PlayerHead" unique_id=894162081]
+current = true

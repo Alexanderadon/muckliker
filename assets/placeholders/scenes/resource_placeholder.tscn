@@ -1,0 +1,23 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://resource/scripts/resource_node.gd" id="1"]
+
+[sub_resource type="BoxMesh" id="1"]
+size = Vector3(0.7, 1.0, 0.7)
+
+[sub_resource type="StandardMaterial3D" id="2"]
+albedo_color = Color(0.117647, 0.878431, 0.901961, 1)
+metallic = 0.2
+roughness = 0.2
+emission_enabled = true
+emission = Color(0.117647, 0.878431, 0.901961, 1)
+emission_energy_multiplier = 0.5
+
+[node name="Crystal" type="Node3D"]
+script = ExtResource("1")
+item_id = "crystal"
+amount = 1
+
+[node name="Visual" type="MeshInstance3D" parent="."]
+mesh = SubResource("1")
+surface_material_override/0 = SubResource("2")
