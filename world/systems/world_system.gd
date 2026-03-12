@@ -1,15 +1,23 @@
 extends Node3D
 class_name WorldSystem
+const ChunkDataModel = preload("res://world/systems/chunk_data.gd")
 
 @export var chunk_size: int = 64
 @export var terrain_height_scale: float = 10.0
 @export var max_spawn_operations_per_frame: int = 10
+@export var max_chunk_loads_per_frame: int = 1
 @export var player_path: NodePath = NodePath("../PlayerRoot")
 @export var totem_scene: PackedScene = preload("res://totem/totem.tscn")
 @export var totem_spawn_chance_per_chunk: float = 0.08
 @export var totem_density_multiplier: float = 3.0
 @export var totem_distribution_grid_size_chunks: int = 2
 @export var totem_min_spawn_distance: float = 12.0
+@export var max_cached_chunk_data_entries: int = 512
+@export var chunk_data_retention_distance_chunks: int = 8
+@export var debug_enable_scene_diagnostics: bool = true
+@export var debug_diagnostics_auto_once: bool = true
+@export var debug_diagnostics_delay_seconds: float = 2.0
+@export var debug_diagnostics_top_types: int = 25
 
 const VIEW_DISTANCE_CHUNKS: int = 4
 const MAX_ACTIVE_CHUNKS: int = 81
@@ -24,6 +32,7 @@ const CAMERA_FAR_CLIP: float = 1000.0
 const FOG_DEPTH_BEGIN: float = 260.0
 const FOG_DEPTH_END: float = 980.0
 const FOG_DENSITY: float = 0.0025
+const MAX_FPS_LIMIT: int = 240
 
 var world_seed: int = 0
 var _last_player_chunk: Vector2i = Vector2i(2147483647, 2147483647)
@@ -38,9 +47,10 @@ var _terrain_resolution: int = TERRAIN_RESOLUTION
 var _player_root: CharacterBody3D = null
 var _terrain_generator: TerrainGenerator = null
 var _loaded_chunks: Dictionary = {}
+var _chunk_data_store: Dictionary = {}
 var _pending_spawn_operations: Array[Dictionary] = []
-var _totem_spawned_chunks: Dictionary = {}
-var _totem_positions_by_chunk: Dictionary = {}
+var _pending_chunk_loads: Array[Vector2i] = []
+var _pending_chunk_load_lookup: Dictionary = {}
 
 var _chunks_root: Node3D = null
 var _combat_system: Node = null
@@ -52,6 +62,7 @@ var _ui_system: Node = null
 var _crafting_system: Node = null
 
 func _ready() -> void:
+	Engine.max_fps = MAX_FPS_LIMIT
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_apply_game_config()
 	_initialize_runtime_systems()
@@ -65,13 +76,14 @@ func _ready() -> void:
 		game_state.call("set_state", "loading")
 	if _player_root != null:
 		_last_player_chunk = _chunk_id_from_position(_player_root.global_position)
-		_update_chunks(_player_root.global_position)
+		_update_chunks(_player_root.global_position, true)
 	else:
 		_last_player_chunk = _chunk_id_from_position(Vector3.ZERO)
-		_update_chunks(Vector3.ZERO)
+		_update_chunks(Vector3.ZERO, true)
 	_process_spawn_operations()
 	if game_state != null and game_state.has_method("set_state"):
 		game_state.call("set_state", "playing")
+	_schedule_debug_diagnostics_once()
 
 func _process(_delta: float) -> void:
 	DebugProfiler.start_sample("world.process")
@@ -85,12 +97,16 @@ func _process(_delta: float) -> void:
 	if player_chunk != _last_player_chunk:
 		_last_player_chunk = player_chunk
 		_update_chunks(player_position)
+	_process_chunk_load_queue()
 	_process_spawn_operations()
 	DebugProfiler.end_sample("world.process")
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var key_event: InputEventKey = event
+		if key_event.pressed and not key_event.echo and key_event.keycode == KEY_F9:
+			_run_debug_scene_diagnostics()
+			return
 		if not key_event.pressed or key_event.echo or key_event.keycode != KEY_ESCAPE:
 			return
 		var game_state := _get_game_state()
@@ -349,14 +365,18 @@ func _get_or_create_system(node_name: String, script_path: String) -> Node:
 	add_child(new_node)
 	return new_node
 
-func _update_chunks(player_position: Vector3) -> void:
+func _update_chunks(player_position: Vector3, immediate_load: bool = false) -> void:
 	var player_chunk := _chunk_id_from_position(player_position)
 	var required_chunks: Array[Vector2i] = ChunkMath.build_required_chunks(player_chunk, _view_distance_chunks)
 	var required_lookup := {}
 	for chunk_id in required_chunks:
 		required_lookup[chunk_id] = true
 		if not _loaded_chunks.has(chunk_id):
-			_load_chunk(chunk_id)
+			if immediate_load:
+				_load_chunk(chunk_id)
+			else:
+				_enqueue_chunk_load(chunk_id)
+	_drop_stale_pending_chunk_loads(required_lookup)
 	for loaded_chunk_key in _loaded_chunks.keys().duplicate():
 		if not (loaded_chunk_key is Vector2i):
 			continue
@@ -369,29 +389,40 @@ func _update_chunks(player_position: Vector3) -> void:
 			var farthest_chunk := _find_farthest_chunk(player_chunk)
 			_unload_chunk(farthest_chunk)
 	_update_chunk_lod(player_chunk)
+	_trim_chunk_data_cache(player_chunk)
 
 func _chunk_id_from_position(world_position: Vector3) -> Vector2i:
 	return ChunkMath.chunk_id_from_position(world_position, chunk_size)
 
 func _load_chunk(chunk_id: Vector2i) -> void:
+	if _loaded_chunks.has(chunk_id):
+		return
+	var chunk_data = _get_or_create_chunk_data(chunk_id)
+	chunk_data.touch()
 	var chunk_root := Node3D.new()
 	chunk_root.name = "Chunk_%s_%s" % [chunk_id.x, chunk_id.y]
+	chunk_root.set_meta("chunk_id", chunk_id)
 	_chunks_root.add_child(chunk_root)
 	_loaded_chunks[chunk_id] = chunk_root
 	_spawn_chunk_terrain(chunk_id, chunk_root)
-	_queue_chunk_spawns(chunk_id)
+	_queue_chunk_spawns(chunk_id, chunk_data)
 	EventBus.emit_game_event("chunk_loaded", {
 		"chunk_id": chunk_id,
-		"seed": _chunk_seed(chunk_id)
+		"seed": chunk_data.seed
 	})
 
 func _unload_chunk(chunk_id: Vector2i) -> void:
 	if not _loaded_chunks.has(chunk_id):
 		return
+	var chunk_data = _get_or_create_chunk_data(chunk_id)
+	chunk_data.touch()
+	_remove_pending_chunk_load(chunk_id)
 	if _enemy_system != null and _enemy_system.has_method("on_chunk_unloaded"):
 		_enemy_system.call("on_chunk_unloaded", chunk_id)
 	if _resource_system != null and _resource_system.has_method("on_chunk_unloaded"):
 		_resource_system.call("on_chunk_unloaded", chunk_id)
+	if _loot_system != null and _loot_system.has_method("on_chunk_unloaded"):
+		_loot_system.call("on_chunk_unloaded", chunk_id)
 	var chunk_root_variant: Variant = _loaded_chunks[chunk_id]
 	var chunk_root: Node = chunk_root_variant as Node
 	_loaded_chunks.erase(chunk_id)
@@ -401,6 +432,47 @@ func _unload_chunk(chunk_id: Vector2i) -> void:
 	EventBus.emit_game_event("chunk_unloaded", {
 		"chunk_id": chunk_id
 	})
+
+func _enqueue_chunk_load(chunk_id: Vector2i) -> void:
+	if _loaded_chunks.has(chunk_id):
+		return
+	if _pending_chunk_load_lookup.has(chunk_id):
+		return
+	_pending_chunk_load_lookup[chunk_id] = true
+	_pending_chunk_loads.append(chunk_id)
+
+func _process_chunk_load_queue() -> void:
+	if _pending_chunk_loads.is_empty():
+		return
+	var loads_done: int = 0
+	var load_budget: int = maxi(max_chunk_loads_per_frame, 1)
+	while loads_done < load_budget and not _pending_chunk_loads.is_empty():
+		var chunk_id: Vector2i = _pending_chunk_loads.pop_front()
+		_pending_chunk_load_lookup.erase(chunk_id)
+		if _loaded_chunks.has(chunk_id):
+			continue
+		_load_chunk(chunk_id)
+		loads_done += 1
+
+func _drop_stale_pending_chunk_loads(required_lookup: Dictionary) -> void:
+	if _pending_chunk_loads.is_empty():
+		return
+	var retained: Array[Vector2i] = []
+	var retained_lookup: Dictionary = {}
+	for chunk_id in _pending_chunk_loads:
+		if required_lookup.has(chunk_id) and not _loaded_chunks.has(chunk_id):
+			retained.append(chunk_id)
+			retained_lookup[chunk_id] = true
+	_pending_chunk_loads = retained
+	_pending_chunk_load_lookup = retained_lookup
+
+func _remove_pending_chunk_load(chunk_id: Vector2i) -> void:
+	if not _pending_chunk_load_lookup.has(chunk_id):
+		return
+	_pending_chunk_load_lookup.erase(chunk_id)
+	var pending_index: int = _pending_chunk_loads.find(chunk_id)
+	if pending_index >= 0:
+		_pending_chunk_loads.remove_at(pending_index)
 
 func _find_farthest_chunk(player_chunk: Vector2i) -> Vector2i:
 	var farthest_chunk := player_chunk
@@ -468,9 +540,12 @@ func _spawn_chunk_terrain(chunk_id: Vector2i, chunk_root: Node3D) -> void:
 	collider.shape = shape
 	ground_body.add_child(collider)
 
-func _queue_chunk_spawns(chunk_id: Vector2i) -> void:
+func _queue_chunk_spawns(chunk_id: Vector2i, chunk_data = null) -> void:
+	if chunk_data == null:
+		chunk_data = _get_or_create_chunk_data(chunk_id)
+	chunk_data.touch()
 	var rng := RandomNumberGenerator.new()
-	rng.seed = _chunk_seed(chunk_id)
+	rng.seed = chunk_data.seed
 	for _i in range(_resource_spawns_per_chunk):
 		var position := _random_position_in_chunk(chunk_id, rng)
 		if position.y <= WATER_LEVEL + 0.2:
@@ -511,17 +586,37 @@ func _queue_chunk_spawns(chunk_id: Vector2i) -> void:
 			"item_id": pickup_item_id,
 			"amount": 1
 		})
-	if _should_spawn_totem_in_chunk(chunk_id):
-		var totem_spawn_result: Dictionary = _compute_totem_spawn_position(chunk_id, rng)
-		if bool(totem_spawn_result.get("valid", false)):
-			var totem_position_variant: Variant = totem_spawn_result.get("position", Vector3.ZERO)
-			var totem_position: Vector3 = totem_position_variant if totem_position_variant is Vector3 else Vector3.ZERO
-			_pending_spawn_operations.append({
-				"type": "totem",
-				"chunk_id": chunk_id,
-				"position": totem_position,
-				"totem_id": "totem_%s_%s" % [chunk_id.x, chunk_id.y]
-			})
+	_queue_totem_spawn_for_chunk(chunk_id, rng, chunk_data)
+
+func _queue_totem_spawn_for_chunk(chunk_id: Vector2i, rng: RandomNumberGenerator, chunk_data) -> void:
+	if chunk_data == null:
+		return
+	if chunk_data.totem_state == ChunkDataModel.TotemState.COMPLETED:
+		return
+	if chunk_data.totem_state == ChunkDataModel.TotemState.SPAWNED:
+		_pending_spawn_operations.append({
+			"type": "totem",
+			"chunk_id": chunk_id,
+			"position": chunk_data.totem_position,
+			"totem_id": "totem_%s_%s" % [chunk_id.x, chunk_id.y]
+		})
+		return
+	if not _should_spawn_totem_in_chunk(chunk_id):
+		chunk_data.set_totem_none()
+		return
+	var totem_spawn_result: Dictionary = _compute_totem_spawn_position(chunk_id, rng)
+	if not bool(totem_spawn_result.get("valid", false)):
+		chunk_data.touch()
+		return
+	var totem_position_variant: Variant = totem_spawn_result.get("position", Vector3.ZERO)
+	var totem_position: Vector3 = totem_position_variant if totem_position_variant is Vector3 else Vector3.ZERO
+	chunk_data.set_totem_spawned(totem_position)
+	_pending_spawn_operations.append({
+		"type": "totem",
+		"chunk_id": chunk_id,
+		"position": totem_position,
+		"totem_id": "totem_%s_%s" % [chunk_id.x, chunk_id.y]
+	})
 
 func _process_spawn_operations() -> void:
 	var operations_done := 0
@@ -566,6 +661,7 @@ func _execute_spawn_operation(operation: Dictionary) -> bool:
 			"position": pickup_position,
 			"item_id": pickup_item_id,
 			"amount": pickup_amount,
+			"chunk_id": chunk_id,
 			"spawned_from_world": true
 		})
 	if operation_type == "totem":
@@ -584,8 +680,13 @@ func _execute_spawn_operation(operation: Dictionary) -> bool:
 		if totem_node.has_method("set_totem_id"):
 			var totem_id_variant: Variant = operation.get("totem_id", "")
 			totem_node.call("set_totem_id", StringName(String(totem_id_variant)))
-		_totem_spawned_chunks[chunk_id] = true
-		_totem_positions_by_chunk[chunk_id] = totem_position
+		var chunk_data = _get_or_create_chunk_data(chunk_id)
+		chunk_data.set_totem_spawned(totem_position)
+		var totem_ref: Totem = totem_node as Totem
+		if totem_ref != null:
+			var completed_callback: Callable = Callable(self, "_on_chunk_totem_completed").bind(chunk_id)
+			if not totem_ref.completed.is_connected(completed_callback):
+				totem_ref.completed.connect(completed_callback, CONNECT_ONE_SHOT)
 		return true
 	return false
 
@@ -596,7 +697,12 @@ func _random_position_in_chunk(chunk_id: Vector2i, rng: RandomNumberGenerator) -
 	return Vector3(world_x, world_y, world_z)
 
 func _should_spawn_totem_in_chunk(chunk_id: Vector2i) -> bool:
-	if _totem_spawned_chunks.has(chunk_id):
+	var chunk_data = _get_or_create_chunk_data(chunk_id)
+	if chunk_data.totem_state == ChunkDataModel.TotemState.COMPLETED:
+		return false
+	if chunk_data.totem_state == ChunkDataModel.TotemState.SPAWNED:
+		return true
+	if chunk_data.totem_state == ChunkDataModel.TotemState.NONE:
 		return false
 	var grid_size: int = maxi(totem_distribution_grid_size_chunks, 2)
 	var macro_x: int = int(floor(float(chunk_id.x) / float(grid_size)))
@@ -636,10 +742,13 @@ func _compute_totem_spawn_position(chunk_id: Vector2i, rng: RandomNumberGenerato
 
 func _is_totem_spawn_position_clear(position: Vector3) -> bool:
 	var min_distance_squared: float = totem_min_spawn_distance * totem_min_spawn_distance
-	for existing_variant in _totem_positions_by_chunk.values():
-		if not (existing_variant is Vector3):
+	for chunk_data_variant in _chunk_data_store.values():
+		var chunk_data = chunk_data_variant
+		if chunk_data == null:
 			continue
-		var existing_position: Vector3 = existing_variant
+		if chunk_data.totem_state != ChunkDataModel.TotemState.SPAWNED and chunk_data.totem_state != ChunkDataModel.TotemState.COMPLETED:
+			continue
+		var existing_position: Vector3 = chunk_data.totem_position
 		if existing_position.distance_squared_to(position) < min_distance_squared:
 			return false
 	for pending_operation in _pending_spawn_operations:
@@ -662,12 +771,211 @@ func _chunk_center(chunk_id: Vector2i) -> Vector2:
 func _chunk_seed(chunk_id: Vector2i) -> int:
 	return int(hash("%s:%s:%s" % [world_seed, chunk_id.x, chunk_id.y]))
 
+func _get_or_create_chunk_data(chunk_id: Vector2i):
+	var existing_variant: Variant = _chunk_data_store.get(chunk_id, null)
+	var existing_data = existing_variant
+	if existing_data != null:
+		existing_data.touch()
+		return existing_data
+	var new_data = ChunkDataModel.new()
+	new_data.chunk_id = chunk_id
+	new_data.seed = _chunk_seed(chunk_id)
+	new_data.touch()
+	_chunk_data_store[chunk_id] = new_data
+	return new_data
+
+func _trim_chunk_data_cache(player_chunk: Vector2i) -> void:
+	var cache_limit: int = maxi(max_cached_chunk_data_entries, 64)
+	if _chunk_data_store.size() <= cache_limit:
+		return
+	var retention_distance: int = maxi(chunk_data_retention_distance_chunks, _view_distance_chunks + 1)
+	var retention_distance_squared: int = retention_distance * retention_distance
+	var eviction_candidates: Array[Dictionary] = []
+	for chunk_key in _chunk_data_store.keys():
+		if not (chunk_key is Vector2i):
+			continue
+		var chunk_id: Vector2i = chunk_key
+		var chunk_data_variant: Variant = _chunk_data_store[chunk_id]
+		var chunk_data = chunk_data_variant
+		if chunk_data == null:
+			continue
+		if _loaded_chunks.has(chunk_id):
+			continue
+		if chunk_data.has_runtime_changes:
+			continue
+		if int(chunk_id.distance_squared_to(player_chunk)) <= retention_distance_squared:
+			continue
+		eviction_candidates.append({
+			"chunk_id": chunk_id,
+			"last_touched_usec": chunk_data.last_touched_usec
+		})
+	if eviction_candidates.is_empty():
+		return
+	eviction_candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.get("last_touched_usec", 0)) < int(b.get("last_touched_usec", 0))
+	)
+	var remove_count: int = _chunk_data_store.size() - cache_limit
+	var removed: int = 0
+	for entry in eviction_candidates:
+		if removed >= remove_count:
+			break
+		var chunk_id: Vector2i = entry.get("chunk_id", Vector2i.ZERO)
+		_chunk_data_store.erase(chunk_id)
+		removed += 1
+
+func _on_chunk_totem_completed(_totem_id: StringName, chunk_id: Vector2i) -> void:
+	var chunk_data = _get_or_create_chunk_data(chunk_id)
+	chunk_data.set_totem_completed()
+
 func _drop_pending_operations_for_chunk(chunk_id: Vector2i) -> void:
 	var retained: Array[Dictionary] = []
 	for operation in _pending_spawn_operations:
 		if operation.get("chunk_id", Vector2i.ZERO) != chunk_id:
 			retained.append(operation)
 	_pending_spawn_operations = retained
+
+func _schedule_debug_diagnostics_once() -> void:
+	if not debug_enable_scene_diagnostics or not debug_diagnostics_auto_once:
+		return
+	var delay_seconds: float = maxf(debug_diagnostics_delay_seconds, 0.0)
+	if delay_seconds <= 0.0:
+		_run_debug_scene_diagnostics()
+		return
+	var tree_ref: SceneTree = get_tree()
+	if tree_ref == null:
+		return
+	var timer: SceneTreeTimer = tree_ref.create_timer(delay_seconds)
+	timer.timeout.connect(Callable(self, "_run_debug_scene_diagnostics"), CONNECT_ONE_SHOT)
+
+func _run_debug_scene_diagnostics() -> void:
+	if not debug_enable_scene_diagnostics:
+		return
+	var tree_ref: SceneTree = get_tree()
+	if tree_ref == null:
+		return
+	var root: Node = tree_ref.current_scene
+	if root == null:
+		return
+	var type_counts: Dictionary = _collect_node_type_counts(root)
+	var top_lines: PackedStringArray = _build_top_type_lines(type_counts, maxi(debug_diagnostics_top_types, 1))
+	var chunk_lines: PackedStringArray = _build_chunk_diagnostic_lines()
+	print("===== [DebugDiagnostics] Node Types Top %d =====" % maxi(debug_diagnostics_top_types, 1))
+	for line in top_lines:
+		print(line)
+	print("===== [DebugDiagnostics] Chunk Report =====")
+	for line in chunk_lines:
+		print(line)
+
+func _collect_node_type_counts(root: Node) -> Dictionary:
+	var counts: Dictionary = {}
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		var node_type_name: String = node.get_class()
+		counts[node_type_name] = int(counts.get(node_type_name, 0)) + 1
+		for child_variant in node.get_children():
+			var child: Node = child_variant as Node
+			if child != null:
+				stack.append(child)
+	return counts
+
+func _build_top_type_lines(type_counts: Dictionary, top_limit: int) -> PackedStringArray:
+	var lines: PackedStringArray = PackedStringArray()
+	var keys: Array = type_counts.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var class_a: String = String(a)
+		var class_b: String = String(b)
+		var count_a: int = int(type_counts.get(class_a, 0))
+		var count_b: int = int(type_counts.get(class_b, 0))
+		if count_a == count_b:
+			return class_a < class_b
+		return count_a > count_b
+	)
+	var result_count: int = mini(top_limit, keys.size())
+	for i in range(result_count):
+		var node_type_name: String = String(keys[i])
+		lines.append("%s: %d" % [node_type_name, int(type_counts.get(node_type_name, 0))])
+	return lines
+
+func _build_chunk_diagnostic_lines() -> PackedStringArray:
+	var lines: PackedStringArray = PackedStringArray()
+	var chunk_entries: Array[Dictionary] = []
+	var total_direct_objects: int = 0
+	var total_subtree_nodes: int = 0
+	for chunk_key in _loaded_chunks.keys():
+		if not (chunk_key is Vector2i):
+			continue
+		var chunk_id: Vector2i = chunk_key
+		var chunk_root_variant: Variant = _loaded_chunks[chunk_id]
+		var chunk_root: Node = chunk_root_variant as Node
+		if chunk_root == null or not is_instance_valid(chunk_root):
+			continue
+		var direct_objects: int = chunk_root.get_child_count()
+		var subtree_nodes: int = _count_subtree_nodes(chunk_root)
+		total_direct_objects += direct_objects
+		total_subtree_nodes += subtree_nodes
+		chunk_entries.append({
+			"chunk_id": chunk_id,
+			"direct_objects": direct_objects,
+			"subtree_nodes": subtree_nodes
+		})
+	var loaded_chunks_count: int = chunk_entries.size()
+	var avg_direct: float = 0.0
+	var avg_nodes: float = 0.0
+	if loaded_chunks_count > 0:
+		avg_direct = float(total_direct_objects) / float(loaded_chunks_count)
+		avg_nodes = float(total_subtree_nodes) / float(loaded_chunks_count)
+	var dirty_chunk_data_count: int = 0
+	for chunk_data_variant in _chunk_data_store.values():
+		var chunk_data = chunk_data_variant
+		if chunk_data != null and chunk_data.has_runtime_changes:
+			dirty_chunk_data_count += 1
+	lines.append("Chunks loaded: %d" % loaded_chunks_count)
+	lines.append("ChunkData cached: %d (dirty=%d)" % [_chunk_data_store.size(), dirty_chunk_data_count])
+	if _loot_system != null and _loot_system.has_method("get_debug_counts"):
+		var loot_debug_variant: Variant = _loot_system.call("get_debug_counts")
+		if loot_debug_variant is Dictionary:
+			var loot_debug: Dictionary = loot_debug_variant
+			lines.append(
+				"Loot debug: pool=%d active=%d pending=%d chunk_buckets=%d" % [
+					int(loot_debug.get("pool_size", 0)),
+					int(loot_debug.get("active_loot", 0)),
+					int(loot_debug.get("pending_spawns", 0)),
+					int(loot_debug.get("chunk_buckets", 0))
+				]
+			)
+	lines.append("Average objects per chunk (direct children): %.2f" % avg_direct)
+	lines.append("Average nodes per chunk (full subtree): %.2f" % avg_nodes)
+	chunk_entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_nodes: int = int(a.get("subtree_nodes", 0))
+		var b_nodes: int = int(b.get("subtree_nodes", 0))
+		if a_nodes == b_nodes:
+			var a_id: Vector2i = a.get("chunk_id", Vector2i.ZERO)
+			var b_id: Vector2i = b.get("chunk_id", Vector2i.ZERO)
+			if a_id.x == b_id.x:
+				return a_id.y < b_id.y
+			return a_id.x < b_id.x
+		return a_nodes > b_nodes
+	)
+	lines.append("Nodes created per chunk:")
+	for entry in chunk_entries:
+		var chunk_id: Vector2i = entry.get("chunk_id", Vector2i.ZERO)
+		var direct_objects: int = int(entry.get("direct_objects", 0))
+		var subtree_nodes: int = int(entry.get("subtree_nodes", 0))
+		lines.append("Chunk(%d,%d): direct=%d total_nodes=%d" % [chunk_id.x, chunk_id.y, direct_objects, subtree_nodes])
+	return lines
+
+func _count_subtree_nodes(root: Node) -> int:
+	var total: int = 0
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		total += 1
+		for child_variant in node.get_children():
+			var child: Node = child_variant as Node
+			if child != null:
+				stack.append(child)
+	return total
 
 func _get_game_state() -> Node:
 	return get_node_or_null("/root/GameState")

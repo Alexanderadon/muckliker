@@ -1,11 +1,9 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene format=3]
 
-[ext_resource type="Script" path="res://abilities/ability_capsule.gd" id="1_khr44"]
-[ext_resource type="AudioStream" path="res://assets/audio/ui/ability_capsule_pickup.wav" id="2_4s2eu"]
+[ext_resource type="Script" uid="uid://chhl3gxcnyfwk" path="res://abilities/ability_capsule.gd" id="1_khr44"]
 
 [node name="AbilityCapsule" type="Area3D"]
 script = ExtResource("1_khr44")
-pickup_sound = ExtResource("2_4s2eu")
 
 [node name="PickupAudioPlayer" type="AudioStreamPlayer" parent="."]
 bus = &"Master"

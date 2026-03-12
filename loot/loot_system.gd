@@ -4,6 +4,9 @@ extends Node
 @export var max_spawn_operations_per_frame: int = 10
 @export var pickup_distance: float = 2.0
 @export var pickup_delay_seconds: float = 0.35
+@export var loot_auto_despawn_seconds: float = 120.0
+@export var max_total_loot_pool_size: int = 600
+@export var enable_chunk_loot_cleanup: bool = true
 
 const ITEM_DB_PATH: String = "res://shared/items/item_db.json"
 const LOOT_PHYSICS_ACTIVE_TIME: float = 2.0
@@ -23,6 +26,7 @@ var _player: Node3D = null
 var _inventory_system: Node = null
 var _loot_pool: Array[Node3D] = []
 var _active_loot: Array[Node3D] = []
+var _loot_by_chunk: Dictionary = {}
 var _pending_spawns: Array[Dictionary] = []
 var _item_definitions: Dictionary = {}
 var _pool_index: ObjectPool = ObjectPool.new()
@@ -33,6 +37,10 @@ func _ready() -> void:
 	_warm_pool()
 	EventBus.subscribe("loot_spawn_requested", Callable(self, "_on_loot_spawn_requested"))
 
+func _exit_tree() -> void:
+	if EventBus != null and EventBus.has_method("unsubscribe"):
+		EventBus.call("unsubscribe", "loot_spawn_requested", Callable(self, "_on_loot_spawn_requested"))
+
 func _process(_delta: float) -> void:
 	_process_pending_spawns()
 	_update_active_loot_physics()
@@ -42,6 +50,25 @@ func set_player(player: Node3D) -> void:
 
 func set_inventory_system(inventory_system: Node) -> void:
 	_inventory_system = inventory_system
+
+func on_chunk_unloaded(chunk_id: Vector2i) -> void:
+	if not enable_chunk_loot_cleanup:
+		return
+	_drop_pending_spawns_for_chunk(chunk_id)
+	_despawn_loot_for_chunk(chunk_id)
+
+func get_debug_counts() -> Dictionary:
+	var active_count: int = 0
+	for loot_variant in _active_loot:
+		var loot: Node3D = loot_variant as Node3D
+		if loot != null and is_instance_valid(loot) and bool(loot.get_meta("active", false)):
+			active_count += 1
+	return {
+		"pool_size": _loot_pool.size(),
+		"active_loot": active_count,
+		"pending_spawns": _pending_spawns.size(),
+		"chunk_buckets": _loot_by_chunk.size()
+	}
 
 func _on_loot_spawn_requested(payload: Dictionary) -> void:
 	_pending_spawns.append(payload)
@@ -66,7 +93,10 @@ func _spawn_loot(payload: Dictionary) -> bool:
 	var item_id_variant: Variant = payload.get("item_id", "unknown")
 	var amount_variant: Variant = payload.get("amount", 1)
 	var spawned_from_world_variant: Variant = payload.get("spawned_from_world", false)
+	var chunk_id_variant: Variant = payload.get("chunk_id", null)
 	var spawned_from_world: bool = bool(spawned_from_world_variant)
+	var has_chunk_id: bool = chunk_id_variant is Vector2i
+	var chunk_id: Vector2i = chunk_id_variant if has_chunk_id else Vector2i.ZERO
 	var item_id: String = String(item_id_variant)
 	var amount: int = int(amount_variant)
 	var base_position: Vector3 = position_variant if position_variant is Vector3 else Vector3.ZERO
@@ -78,6 +108,11 @@ func _spawn_loot(payload: Dictionary) -> bool:
 	loot.set_meta("motion_slowing", false)
 	loot.set_meta("active", true)
 	loot.set_meta("spawn_time", float(Time.get_ticks_msec()) / 1000.0)
+	if spawned_from_world and has_chunk_id:
+		loot.set_meta("chunk_id", chunk_id)
+		_register_loot_in_chunk(chunk_id, loot)
+	elif loot.has_meta("chunk_id"):
+		loot.remove_meta("chunk_id")
 	loot.visible = true
 	_apply_loot_visual(loot, item_id)
 	if rigid_loot != null:
@@ -297,6 +332,8 @@ func _take_from_pool() -> Node3D:
 	var pooled_loot: Node3D = pooled_node as Node3D
 	if pooled_loot != null:
 		return pooled_loot
+	if _loot_pool.size() >= maxi(max_total_loot_pool_size, loot_pool_size):
+		return null
 	# Fallback: dynamically grow pool to avoid dropping items/resources on pool exhaustion.
 	var new_loot: Node3D = _create_loot_node()
 	add_child(new_loot)
@@ -308,6 +345,7 @@ func _take_from_pool() -> Node3D:
 
 func _despawn_loot(loot: Node3D) -> void:
 	_active_loot.erase(loot)
+	_unregister_loot_from_chunk(loot)
 	loot.visible = false
 	loot.set_meta("active", false)
 	loot.set_meta("motion_frozen", false)
@@ -359,11 +397,19 @@ func _update_active_loot_physics() -> void:
 	if _active_loot.is_empty():
 		return
 	var now_seconds: float = float(Time.get_ticks_msec()) / 1000.0
-	for loot_variant in _active_loot:
+	for loot_variant in _active_loot.duplicate():
 		var loot: Node3D = loot_variant as Node3D
 		if loot == null or not is_instance_valid(loot):
+			_active_loot.erase(loot_variant)
 			continue
 		if not bool(loot.get_meta("active", false)):
+			continue
+		var spawn_time_variant: Variant = loot.get_meta("spawn_time", now_seconds)
+		var spawn_time: float = float(spawn_time_variant)
+		var age_seconds: float = now_seconds - spawn_time
+		# Prevent long-running sessions from accumulating uncollected drops forever.
+		if loot_auto_despawn_seconds > 0.0 and age_seconds >= loot_auto_despawn_seconds:
+			_despawn_loot(loot)
 			continue
 		if bool(loot.get_meta("motion_frozen", false)):
 			continue
@@ -375,9 +421,6 @@ func _update_active_loot_physics() -> void:
 			rigid_loot.angular_damp = LOOT_BASE_ANGULAR_DAMP
 			loot.set_meta("motion_slowing", false)
 			continue
-		var spawn_time_variant: Variant = loot.get_meta("spawn_time", now_seconds)
-		var spawn_time: float = float(spawn_time_variant)
-		var age_seconds: float = now_seconds - spawn_time
 		if age_seconds >= LOOT_PHYSICS_FREEZE_TIME:
 			rigid_loot.linear_velocity = Vector3.ZERO
 			rigid_loot.angular_velocity = Vector3.ZERO
@@ -420,3 +463,57 @@ func _is_loot_on_settle_surface(rigid_loot: RigidBody3D) -> bool:
 	var slope_dot: float = clampf(normal.dot(Vector3.UP), -1.0, 1.0)
 	var slope_degrees: float = rad_to_deg(acos(slope_dot))
 	return slope_degrees < LOOT_SETTLE_SLOPE_DEGREES
+
+func _register_loot_in_chunk(chunk_id: Vector2i, loot: Node3D) -> void:
+	if not _loot_by_chunk.has(chunk_id):
+		_loot_by_chunk[chunk_id] = []
+	var chunk_loot_variant: Variant = _loot_by_chunk.get(chunk_id, [])
+	var chunk_loot: Array = chunk_loot_variant if chunk_loot_variant is Array else []
+	if chunk_loot.find(loot) < 0:
+		chunk_loot.append(loot)
+	_loot_by_chunk[chunk_id] = chunk_loot
+
+func _unregister_loot_from_chunk(loot: Node3D) -> void:
+	if loot == null or not loot.has_meta("chunk_id"):
+		return
+	var chunk_id_variant: Variant = loot.get_meta("chunk_id", Vector2i.ZERO)
+	if not (chunk_id_variant is Vector2i):
+		return
+	var chunk_id: Vector2i = chunk_id_variant
+	if not _loot_by_chunk.has(chunk_id):
+		return
+	var chunk_loot_variant: Variant = _loot_by_chunk.get(chunk_id, [])
+	if not (chunk_loot_variant is Array):
+		_loot_by_chunk.erase(chunk_id)
+		return
+	var chunk_loot: Array = chunk_loot_variant
+	chunk_loot.erase(loot)
+	if chunk_loot.is_empty():
+		_loot_by_chunk.erase(chunk_id)
+	else:
+		_loot_by_chunk[chunk_id] = chunk_loot
+
+func _despawn_loot_for_chunk(chunk_id: Vector2i) -> void:
+	if not _loot_by_chunk.has(chunk_id):
+		return
+	var chunk_loot_variant: Variant = _loot_by_chunk.get(chunk_id, [])
+	if not (chunk_loot_variant is Array):
+		_loot_by_chunk.erase(chunk_id)
+		return
+	var chunk_loot: Array = chunk_loot_variant
+	for loot_variant in chunk_loot.duplicate():
+		var loot: Node3D = loot_variant as Node3D
+		if loot != null and is_instance_valid(loot):
+			_despawn_loot(loot)
+	_loot_by_chunk.erase(chunk_id)
+
+func _drop_pending_spawns_for_chunk(chunk_id: Vector2i) -> void:
+	if _pending_spawns.is_empty():
+		return
+	var retained: Array[Dictionary] = []
+	for payload in _pending_spawns:
+		var payload_chunk_variant: Variant = payload.get("chunk_id", null)
+		if payload_chunk_variant is Vector2i and payload_chunk_variant == chunk_id:
+			continue
+		retained.append(payload)
+	_pending_spawns = retained

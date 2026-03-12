@@ -38,6 +38,11 @@ func _ready() -> void:
 	EventBus.subscribe("player_damaged", Callable(self, "_on_player_damaged"))
 	EventBus.subscribe("loot_picked", Callable(self, "_on_loot_picked"))
 
+func _exit_tree() -> void:
+	if EventBus != null and EventBus.has_method("unsubscribe"):
+		EventBus.call("unsubscribe", "player_damaged", Callable(self, "_on_player_damaged"))
+		EventBus.call("unsubscribe", "loot_picked", Callable(self, "_on_loot_picked"))
+
 func _process(delta: float) -> void:
 	_try_rebind_health_component(delta)
 	_sync_health_ui_from_component()

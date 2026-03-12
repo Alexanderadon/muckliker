@@ -2,6 +2,8 @@ extends CharacterBody3D
 class_name TotemEnemy
 
 signal killed(enemy: TotemEnemy, killer: Node, gold_reward: int, totem_id: StringName)
+const WORLD_HEALTH_BAR_SCRIPT: Script = preload("res://ui/world_health_bar_3d.gd")
+const DEBUG_TOTEM_ENEMY_DIAGNOSTICS: bool = true
 
 enum EnemyState {
 	IDLE,
@@ -39,6 +41,7 @@ var _player: Node3D = null
 var _health_component: HealthComponent = null
 var _damage_component: DamageComponent = null
 var _navigation_agent: NavigationAgent3D = null
+var _health_bar: Node3D = null
 var _attack_cooldown_left: float = 0.0
 var _attack_phase_left: float = 0.0
 var _attack_hit_applied: bool = false
@@ -49,9 +52,17 @@ func _ready() -> void:
 	add_to_group("enemy")
 	_ensure_core_nodes()
 	_configure_components()
+	_ensure_health_bar()
 	_circle_side = -1.0 if randf() < 0.5 else 1.0
 	_attack_cooldown_left = attack_interval
-	EventBus.subscribe("entity_died", Callable(self, "_on_entity_died"))
+	var subscribed: bool = EventBus.subscribe("entity_died", Callable(self, "_on_entity_died"))
+	_log("spawn: subscribed=%s" % str(subscribed))
+
+func _exit_tree() -> void:
+	var unsubscribed: bool = false
+	if EventBus != null and EventBus.has_method("unsubscribe"):
+		unsubscribed = bool(EventBus.call("unsubscribe", "entity_died", Callable(self, "_on_entity_died")))
+	_log("_exit_tree: unsubscribed=%s" % str(unsubscribed))
 
 func setup(player: Node3D, owner_totem_id: StringName) -> void:
 	_player = player
@@ -65,6 +76,8 @@ func setup(player: Node3D, owner_totem_id: StringName) -> void:
 	if _health_component != null:
 		_health_component.max_health = max_health
 		_health_component.reset_health()
+		if _health_bar != null and _health_bar.has_method("bind_health_component"):
+			_health_bar.call("bind_health_component", _health_component)
 
 func _physics_process(delta: float) -> void:
 	if _state == EnemyState.DEAD:
@@ -209,6 +222,7 @@ func _on_entity_died(payload: Dictionary) -> void:
 	set_physics_process(false)
 
 	killed.emit(self, _last_damage_source, gold_reward, totem_id)
+	_log("queue_free requested")
 	EventBus.emit_game_event("enemy_killed", {
 		"enemy_type": "totem_enemy",
 		"killer": _last_damage_source,
@@ -217,6 +231,11 @@ func _on_entity_died(payload: Dictionary) -> void:
 		"position": global_position
 	})
 	queue_free()
+
+func _log(message: String) -> void:
+	if not DEBUG_TOTEM_ENEMY_DIAGNOSTICS:
+		return
+	print("[TotemEnemy#", get_instance_id(), "] ", message)
 
 func _ensure_core_nodes() -> void:
 	_navigation_agent = get_node_or_null(navigation_agent_path) as NavigationAgent3D
@@ -260,6 +279,8 @@ func _configure_components() -> void:
 		_health_component.reset_health()
 	if _damage_component != null:
 		_damage_component.base_damage = attack_damage
+	if _health_bar != null and _health_bar.has_method("bind_health_component"):
+		_health_bar.call("bind_health_component", _health_component)
 
 func _get_or_create_component(node_name: String, script_path: String) -> Node:
 	var existing: Node = get_node_or_null(node_name)
@@ -277,3 +298,19 @@ func _get_or_create_component(node_name: String, script_path: String) -> Node:
 	component.name = node_name
 	add_child(component)
 	return component
+
+func _ensure_health_bar() -> void:
+	var existing: Node3D = get_node_or_null("HealthBar3D") as Node3D
+	if existing != null:
+		_health_bar = existing
+	else:
+		var bar_variant: Variant = WORLD_HEALTH_BAR_SCRIPT.new()
+		var bar_node: Node3D = bar_variant as Node3D
+		if bar_node == null:
+			return
+		bar_node.name = "HealthBar3D"
+		add_child(bar_node)
+		_health_bar = bar_node
+	if _health_bar != null:
+		if _health_bar.has_method("bind_health_component"):
+			_health_bar.call("bind_health_component", _health_component)

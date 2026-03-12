@@ -3,6 +3,7 @@ class_name Totem
 
 signal activated(totem_id: StringName)
 signal completed(totem_id: StringName)
+const DEBUG_TOTEM_DIAGNOSTICS: bool = true
 
 enum TotemState {
 	READY,
@@ -34,6 +35,7 @@ func _ready() -> void:
 		totem_id = StringName("totem_%s" % str(get_instance_id()))
 	_ensure_visuals()
 	_apply_state_visuals()
+	_log("ready: totem_id=%s" % String(totem_id))
 
 func set_totem_id(value: StringName) -> void:
 	totem_id = value
@@ -47,9 +49,11 @@ func interact(interactor: Node) -> bool:
 	return true
 
 func _activate(interactor: Node) -> void:
+	_cleanup_invalid_enemy_refs()
 	_state = TotemState.ACTIVE
 	_activator = interactor
 	_spawn_wave()
+	_log("activate: active_wolves=%d" % _active_enemies.size())
 	_apply_state_visuals()
 	activated.emit(totem_id)
 	EventBus.emit_game_event("totem_activated", {
@@ -80,6 +84,9 @@ func _spawn_wave() -> void:
 		wolf.setup(_activator as Node3D, totem_id)
 		wolf.killed.connect(Callable(self, "_on_enemy_killed"))
 		_active_enemies[wolf.get_instance_id()] = true
+		_log("spawn_wolf: wolf_id=%d active_wolves=%d" % [wolf.get_instance_id(), _active_enemies.size()])
+	_cleanup_invalid_enemy_refs()
+	_log("spawn_wave_done: active_wolves=%d" % _active_enemies.size())
 
 func _resolve_regular_enemy_xp_reward() -> int:
 	var tree_ref: SceneTree = get_tree()
@@ -111,8 +118,16 @@ func _on_enemy_killed(enemy: TotemWolf, _killer: Node, _gold_reward: int, _xp_re
 		return
 	if enemy != null:
 		_active_enemies.erase(enemy.get_instance_id())
+		_log("wolf_killed: wolf_id=%d active_wolves=%d" % [enemy.get_instance_id(), _active_enemies.size()])
+	_cleanup_invalid_enemy_refs()
+	_log("post_cleanup_after_kill: active_wolves=%d" % _active_enemies.size())
 	if _active_enemies.is_empty():
 		_start_completion_sequence()
+
+func _exit_tree() -> void:
+	_cleanup_invalid_enemy_refs()
+	_log("_exit_tree: clearing active_wolves=%d" % _active_enemies.size())
+	_active_enemies.clear()
 
 func _start_completion_sequence() -> void:
 	if _state == TotemState.COMPLETED or _is_breaking:
@@ -179,6 +194,25 @@ func _project_position_to_ground(world_position: Vector3, height_offset: float) 
 		return position
 	position.y = global_position.y + height_offset
 	return position
+
+func _cleanup_invalid_enemy_refs() -> void:
+	var before: int = _active_enemies.size()
+	if before <= 0:
+		return
+	var removed: int = 0
+	for enemy_id_variant in _active_enemies.keys().duplicate():
+		var enemy_id: int = int(enemy_id_variant)
+		var enemy_object: Object = instance_from_id(enemy_id)
+		if enemy_object == null or not is_instance_valid(enemy_object):
+			_active_enemies.erase(enemy_id_variant)
+			removed += 1
+	if removed > 0:
+		_log("cleanup_invalid_refs: before=%d removed=%d after=%d" % [before, removed, _active_enemies.size()])
+
+func _log(message: String) -> void:
+	if not DEBUG_TOTEM_DIAGNOSTICS:
+		return
+	print("[Totem#", get_instance_id(), "] ", message)
 
 func _ensure_visuals() -> void:
 	if get_node_or_null("CollisionShape3D") == null:

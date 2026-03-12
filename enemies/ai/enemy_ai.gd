@@ -2,6 +2,7 @@ extends CharacterBody3D
 class_name EnemyAI
 
 const ENEMY_STATS_PATH: String = "res://data/enemies/default_enemy.json"
+const WORLD_HEALTH_BAR_SCRIPT: Script = preload("res://ui/world_health_bar_3d.gd")
 const DEFAULT_STATS: Dictionary = {
 	"move_speed": 3.5,
 	"detect_radius": 12.0,
@@ -32,6 +33,7 @@ var _target_locked: bool = false
 
 var _health_component: HealthComponent = null
 var _damage_component: DamageComponent = null
+var _health_bar: Node3D = null
 var _stats: Dictionary = {}
 
 func _ready() -> void:
@@ -39,6 +41,7 @@ func _ready() -> void:
 	_load_stats()
 	_ensure_visuals()
 	_ensure_components()
+	_ensure_health_bar()
 	set_active(false)
 
 func _physics_process(delta: float) -> void:
@@ -144,6 +147,8 @@ func _ensure_components() -> void:
 		_health_component.reset_health()
 	if _damage_component != null:
 		_damage_component.base_damage = attack_damage
+	if _health_bar != null and _health_bar.has_method("bind_health_component"):
+		_health_bar.call("bind_health_component", _health_component)
 
 func _load_stats() -> void:
 	_stats = DEFAULT_STATS.duplicate(true)
@@ -184,3 +189,19 @@ func _ensure_visuals() -> void:
 		material.roughness = 0.45
 		visual.material_override = material
 		add_child(visual)
+
+func _ensure_health_bar() -> void:
+	var existing: Node3D = get_node_or_null("HealthBar3D") as Node3D
+	if existing != null:
+		_health_bar = existing
+	else:
+		var bar_variant: Variant = WORLD_HEALTH_BAR_SCRIPT.new()
+		var bar_node: Node3D = bar_variant as Node3D
+		if bar_node == null:
+			return
+		bar_node.name = "HealthBar3D"
+		add_child(bar_node)
+		_health_bar = bar_node
+	if _health_bar != null:
+		if _health_bar.has_method("bind_health_component"):
+			_health_bar.call("bind_health_component", _health_component)

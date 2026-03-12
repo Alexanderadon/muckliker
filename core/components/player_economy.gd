@@ -12,6 +12,11 @@ func _ready() -> void:
 	EventBus.subscribe("enemy_killed", Callable(self, "_on_enemy_killed"))
 	EventBus.subscribe("totem_completed", Callable(self, "_on_totem_completed"))
 
+func _exit_tree() -> void:
+	if EventBus != null and EventBus.has_method("unsubscribe"):
+		EventBus.call("unsubscribe", "enemy_killed", Callable(self, "_on_enemy_killed"))
+		EventBus.call("unsubscribe", "totem_completed", Callable(self, "_on_totem_completed"))
+
 func add_gold(amount: int, source: StringName = &"unknown") -> void:
 	if amount <= 0:
 		return

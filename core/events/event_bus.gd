@@ -45,14 +45,35 @@ func subscribe(event_name: String, listener: Callable) -> bool:
 	if not listener.is_valid():
 		push_warning("EventBus.subscribe rejected invalid callable for %s" % event_name)
 		return false
-	var listeners_variant: Variant = _subscribers.get(event_name, [])
-	var listeners: Array = listeners_variant if listeners_variant is Array else []
+	var listeners: Array = _compact_valid_listeners(_listeners_for(event_name))
 	for existing in listeners:
 		if existing == listener:
+			_subscribers[event_name] = listeners
 			return true
 	listeners.append(listener)
 	_subscribers[event_name] = listeners
 	return true
+
+func unsubscribe(event_name: String, listener: Callable) -> bool:
+	if not EVENT_WHITELIST.has(event_name):
+		return false
+	var listeners: Array = _listeners_for(event_name)
+	var retained: Array = []
+	var removed: bool = false
+	for existing_variant in listeners:
+		if typeof(existing_variant) != TYPE_CALLABLE:
+			removed = true
+			continue
+		var existing: Callable = existing_variant
+		if not existing.is_valid():
+			removed = true
+			continue
+		if existing == listener:
+			removed = true
+			continue
+		retained.append(existing)
+	_subscribers[event_name] = retained
+	return removed
 
 func emit_game_event(event_name: String, payload: Dictionary = {}) -> bool:
 	if not EVENT_WHITELIST.has(event_name):
@@ -62,12 +83,28 @@ func emit_game_event(event_name: String, payload: Dictionary = {}) -> bool:
 		push_warning("EventBus.emit_game_event blocked invalid payload for event: %s" % event_name)
 		return false
 	game_event.emit(event_name, payload)
-	var listeners_variant: Variant = _subscribers.get(event_name, [])
-	var listeners: Array = listeners_variant if listeners_variant is Array else []
+	var listeners: Array = _compact_valid_listeners(_listeners_for(event_name))
+	_subscribers[event_name] = listeners
 	for listener in listeners:
 		if typeof(listener) == TYPE_CALLABLE and listener.is_valid():
 			listener.call(payload)
 	return true
+
+func get_subscriber_count(event_name: String) -> int:
+	if not EVENT_WHITELIST.has(event_name):
+		return 0
+	var listeners: Array = _compact_valid_listeners(_listeners_for(event_name))
+	_subscribers[event_name] = listeners
+	return listeners.size()
+
+func get_all_subscriber_counts() -> Dictionary:
+	var result: Dictionary = {}
+	for event_name_variant in EVENT_WHITELIST.keys():
+		var event_name: String = String(event_name_variant)
+		var listeners: Array = _compact_valid_listeners(_listeners_for(event_name))
+		_subscribers[event_name] = listeners
+		result[event_name] = listeners.size()
+	return result
 
 func _validate_payload(event_name: String, payload: Dictionary) -> bool:
 	if typeof(payload) != TYPE_DICTIONARY:
@@ -82,3 +119,18 @@ func _validate_payload(event_name: String, payload: Dictionary) -> bool:
 		if not payload.has(field_name):
 			return false
 	return true
+
+func _listeners_for(event_name: String) -> Array:
+	var listeners_variant: Variant = _subscribers.get(event_name, [])
+	return listeners_variant if listeners_variant is Array else []
+
+func _compact_valid_listeners(listeners: Array) -> Array:
+	var retained: Array = []
+	for listener_variant in listeners:
+		if typeof(listener_variant) != TYPE_CALLABLE:
+			continue
+		var listener: Callable = listener_variant
+		if not listener.is_valid():
+			continue
+		retained.append(listener)
+	return retained

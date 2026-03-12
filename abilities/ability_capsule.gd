@@ -2,6 +2,7 @@ extends Area3D
 class_name AbilityCapsule
 
 signal collected(ability_id: StringName, collector: Node)
+const DEFAULT_PICKUP_SOUND_PATH: String = "res://assets/audio/ui/ability_capsule_pickup.wav"
 
 @export var ability_pool: Array[StringName] = [&"max_hp_plus_5", &"move_speed_bonus"]
 @export var pickup_sound: AudioStream = null
@@ -25,6 +26,7 @@ func _ready() -> void:
 	add_to_group("ability_capsule")
 	_ensure_visuals()
 	_ensure_audio_player()
+	_try_assign_default_pickup_sound()
 	if _has_spawn_world_position:
 		global_position = _spawn_world_position
 	_base_y = global_position.y + hover_base_height
@@ -130,14 +132,19 @@ func _ensure_audio_player() -> void:
 		add_child(_pickup_audio_player)
 
 func _finalize_collection() -> void:
-	monitoring = false
-	monitorable = false
+	set_deferred("monitoring", false)
+	set_deferred("monitorable", false)
 	set_process(false)
+	set_physics_process(false)
 	for child_variant in get_children():
 		if child_variant is MeshInstance3D or child_variant is OmniLight3D:
 			var child_node: Node3D = child_variant as Node3D
 			if child_node != null:
 				child_node.visible = false
+		elif child_variant is CollisionShape3D:
+			var collision_shape: CollisionShape3D = child_variant as CollisionShape3D
+			if collision_shape != null:
+				collision_shape.set_deferred("disabled", true)
 	if pickup_sound == null:
 		queue_free()
 		return
@@ -156,3 +163,19 @@ func _finalize_collection() -> void:
 
 func _on_pickup_sound_finished() -> void:
 	queue_free()
+
+func _try_assign_default_pickup_sound() -> void:
+	if pickup_sound != null:
+		return
+	var import_meta_path: String = "%s.import" % DEFAULT_PICKUP_SOUND_PATH
+	if FileAccess.file_exists(import_meta_path):
+		var import_config: ConfigFile = ConfigFile.new()
+		if import_config.load(import_meta_path) == OK:
+			var remapped_path: String = String(import_config.get_value("remap", "path", ""))
+			if remapped_path != "" and not FileAccess.file_exists(remapped_path):
+				return
+	if not ResourceLoader.exists(DEFAULT_PICKUP_SOUND_PATH):
+		return
+	var loaded_stream: AudioStream = load(DEFAULT_PICKUP_SOUND_PATH) as AudioStream
+	if loaded_stream != null:
+		pickup_sound = loaded_stream

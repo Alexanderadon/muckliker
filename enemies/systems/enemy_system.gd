@@ -8,6 +8,9 @@ extends Node
 @export var enemy_gold_reward_max: int = 12
 @export var enemy_xp_reward: int = 1
 
+const HEALTH_COMPONENT_SCRIPT: Script = preload("res://core/components/health_component.gd")
+const WORLD_HEALTH_BAR_SCRIPT: Script = preload("res://ui/world_health_bar_3d.gd")
+
 var _player: Node3D = null
 var _combat_system: Node = null
 var _enemy_scene: PackedScene = preload("res://enemies/scenes/enemy_root.tscn")
@@ -25,6 +28,24 @@ func _ready() -> void:
 	_despawn_gate.set_interval(GameConfig.AI_UPDATE_INTERVAL)
 	_warm_pool()
 	EventBus.subscribe("entity_died", Callable(self, "_on_entity_died_event"))
+	var tree_ref: SceneTree = get_tree()
+	if tree_ref != null:
+		var node_added_callback: Callable = Callable(self, "_on_tree_node_added")
+		if not tree_ref.node_added.is_connected(node_added_callback):
+			tree_ref.node_added.connect(node_added_callback)
+		for enemy_variant in tree_ref.get_nodes_in_group("enemy"):
+			var enemy_node: Node3D = enemy_variant as Node3D
+			if enemy_node != null:
+				call_deferred("_ensure_enemy_combat_ui", enemy_node)
+
+func _exit_tree() -> void:
+	if EventBus != null and EventBus.has_method("unsubscribe"):
+		EventBus.call("unsubscribe", "entity_died", Callable(self, "_on_entity_died_event"))
+	var tree_ref: SceneTree = get_tree()
+	if tree_ref != null:
+		var node_added_callback: Callable = Callable(self, "_on_tree_node_added")
+		if tree_ref.node_added.is_connected(node_added_callback):
+			tree_ref.node_added.disconnect(node_added_callback)
 
 func _physics_process(delta: float) -> void:
 	DebugProfiler.start_sample("enemy_system.physics")
@@ -50,6 +71,15 @@ func set_player(player: Node3D) -> void:
 
 func set_combat_system(combat_system: Node) -> void:
 	_combat_system = combat_system
+
+func get_active_enemy_count() -> int:
+	var retained: Array[EnemyAI] = []
+	for enemy_variant in _active_enemies:
+		var enemy: EnemyAI = enemy_variant as EnemyAI
+		if enemy != null and is_instance_valid(enemy) and enemy.is_active():
+			retained.append(enemy)
+	_active_enemies = retained
+	return _active_enemies.size()
 
 func try_spawn_enemy(chunk_id: Vector2i, spawn_position: Vector3, chunk_root: Node3D) -> bool:
 	if _player == null or not is_instance_valid(_player):
@@ -94,6 +124,7 @@ func _warm_pool() -> void:
 		if enemy_instance == null:
 			continue
 		add_child(enemy_instance)
+		_ensure_enemy_combat_ui(enemy_instance)
 		enemy_instance.deactivate()
 		_connect_enemy_signals(enemy_instance)
 		_pool.append(enemy_instance)
@@ -176,3 +207,100 @@ func _apply_game_config() -> void:
 	max_enemies_per_chunk = GameConfig.MAX_ENEMIES_PER_CHUNK
 	spawn_min_distance = GameConfig.ENEMY_SPAWN_MIN_DISTANCE
 	despawn_distance = GameConfig.ENEMY_DESPAWN_DISTANCE
+
+func _on_tree_node_added(node: Node) -> void:
+	if node == null:
+		return
+	var enemy_node: Node3D = node as Node3D
+	if enemy_node == null:
+		return
+	if not _is_enemy_candidate(enemy_node):
+		return
+	call_deferred("_ensure_enemy_combat_ui", enemy_node)
+
+func _ensure_enemy_combat_ui(enemy_node: Node3D) -> void:
+	if enemy_node == null or not is_instance_valid(enemy_node):
+		return
+	if not _is_enemy_candidate(enemy_node):
+		return
+	var health_node: Node = _resolve_or_create_health_node(enemy_node)
+	var health_bar: Node3D = enemy_node.get_node_or_null("HealthBar3D") as Node3D
+	if health_bar == null:
+		var bar_variant: Variant = WORLD_HEALTH_BAR_SCRIPT.new()
+		health_bar = bar_variant as Node3D
+		if health_bar == null:
+			return
+		health_bar.name = "HealthBar3D"
+		enemy_node.add_child(health_bar)
+	var y_offset: float = _estimate_enemy_bar_offset(enemy_node)
+	health_bar.set("y_offset", y_offset)
+	health_bar.set("hide_when_full_health", false)
+	health_bar.set("full_health_hide_delay", 1.75)
+	if health_bar.has_method("bind_health_component"):
+		health_bar.call("bind_health_component", health_node)
+
+func _resolve_or_create_health_node(enemy_node: Node3D) -> Node:
+	var modern: Node = enemy_node.get_node_or_null("HealthComponent")
+	if modern != null and modern.has_method("apply_damage"):
+		return modern
+	var legacy: Node = enemy_node.get_node_or_null("Health")
+	if legacy != null and legacy.has_method("apply_damage"):
+		return legacy
+	var health_variant: Variant = HEALTH_COMPONENT_SCRIPT.new()
+	var created_health: Node = health_variant as Node
+	if created_health == null:
+		return null
+	created_health.name = "HealthComponent"
+	var max_health_value: float = 40.0
+	var from_enemy: Variant = enemy_node.get("max_health")
+	if typeof(from_enemy) == TYPE_FLOAT or typeof(from_enemy) == TYPE_INT:
+		max_health_value = maxf(float(from_enemy), 1.0)
+	created_health.set("max_health", max_health_value)
+	enemy_node.add_child(created_health)
+	if created_health.has_method("reset_health"):
+		created_health.call("reset_health")
+	return created_health
+
+func _estimate_enemy_bar_offset(enemy_node: Node3D) -> float:
+	var collision: CollisionShape3D = enemy_node.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if collision != null and collision.shape != null:
+		var half_height: float = _shape_half_height(collision.shape)
+		if half_height > 0.0:
+			return collision.position.y + half_height + 0.35
+	var visual: MeshInstance3D = enemy_node.get_node_or_null("Visual") as MeshInstance3D
+	if visual != null and visual.mesh != null:
+		var aabb: AABB = visual.mesh.get_aabb()
+		return visual.position.y + aabb.position.y + aabb.size.y + 0.25
+	return 1.9
+
+func _shape_half_height(shape: Shape3D) -> float:
+	if shape == null:
+		return 0.0
+	if shape is CapsuleShape3D:
+		var capsule: CapsuleShape3D = shape as CapsuleShape3D
+		return capsule.height * 0.5
+	if shape is CylinderShape3D:
+		var cylinder: CylinderShape3D = shape as CylinderShape3D
+		return cylinder.height * 0.5
+	if shape is SphereShape3D:
+		var sphere: SphereShape3D = shape as SphereShape3D
+		return sphere.radius
+	if shape is BoxShape3D:
+		var box: BoxShape3D = shape as BoxShape3D
+		return box.size.y * 0.5
+	return 0.0
+
+func _is_enemy_candidate(node: Node3D) -> bool:
+	if node == null:
+		return false
+	if node.is_in_group("enemy"):
+		return true
+	var script_resource: Script = node.get_script() as Script
+	if script_resource == null:
+		return false
+	var script_path: String = script_resource.resource_path.to_lower()
+	if script_path.find("/enemies/") >= 0:
+		return true
+	if script_path.ends_with("totem_wolf.gd") or script_path.ends_with("totem_enemy.gd"):
+		return true
+	return false
