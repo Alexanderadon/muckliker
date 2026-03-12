@@ -15,3 +15,6 @@ res://enemies/ai/enemy_ai.gd
 res://ui/world_health_bar_3d.gd
 res://ui/damage_popup_3d.gd
 res://core/components/damage_component.gd
+res://player/systems/player_system.gd
+res://ui/inventory_ui.tscn
+res://abilities/ability_manager.gd

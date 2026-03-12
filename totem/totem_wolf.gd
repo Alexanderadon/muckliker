@@ -37,6 +37,7 @@ enum WolfState {
 @export var attack_range: float = 1.7
 @export var attack_interval: float = 1.5
 @export var attack_phase_duration: float = 0.22
+@export var spawn_player_clearance_radius: float = 1.35
 
 @export var navigation_agent_path: NodePath = NodePath("NavigationAgent3D")
 @export var health_component_path: NodePath = NodePath("HealthComponent")
@@ -86,6 +87,7 @@ func setup(player: Node3D, owner_totem_id: StringName) -> void:
 		_health_component.reset_health()
 		if _health_bar != null and _health_bar.has_method("bind_health_component"):
 			_health_bar.call("bind_health_component", _health_component)
+	_ensure_spawn_clearance_from_player()
 	_log("setup: totem_id=%s position=%s" % [String(totem_id), str(global_position)])
 
 func _exit_tree() -> void:
@@ -249,6 +251,27 @@ func _resolve_regular_enemy_speed() -> float:
 		return maxf(regular_enemy_speed, 0.1)
 	var loaded_speed: float = float(parsed_stats.get("move_speed", regular_enemy_speed))
 	return maxf(loaded_speed, 0.1)
+
+func _ensure_spawn_clearance_from_player() -> void:
+	if not _has_valid_player():
+		return
+	var min_clearance: float = maxf(spawn_player_clearance_radius, 0.0)
+	if min_clearance <= 0.0:
+		return
+	var horizontal_delta: Vector2 = Vector2(
+		global_position.x - _player.global_position.x,
+		global_position.z - _player.global_position.z
+	)
+	var current_distance: float = horizontal_delta.length()
+	if current_distance >= min_clearance:
+		return
+	var move_direction: Vector2 = horizontal_delta.normalized()
+	if current_distance <= 0.001:
+		move_direction = Vector2.RIGHT.rotated(_rng.randf_range(0.0, TAU))
+	var corrected_position: Vector3 = global_position
+	corrected_position.x = _player.global_position.x + move_direction.x * min_clearance
+	corrected_position.z = _player.global_position.z + move_direction.y * min_clearance
+	global_position = corrected_position
 
 func _on_entity_died(payload: Dictionary) -> void:
 	if _state == WolfState.DEAD:

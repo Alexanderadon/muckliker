@@ -4,7 +4,7 @@ class_name AbilityCapsule
 signal collected(ability_id: StringName, collector: Node)
 const DEFAULT_PICKUP_SOUND_PATH: String = "res://assets/audio/ui/ability_capsule_pickup.wav"
 
-@export var ability_pool: Array[StringName] = [&"max_hp_plus_5", &"move_speed_bonus"]
+@export var ability_pool: Array[StringName] = [&"max_hp_plus_5", &"move_speed_bonus", &"jump_bonus_5_percent"]
 @export var pickup_sound: AudioStream = null
 @export var pickup_sound_bus: StringName = &"Master"
 @export var pickup_sound_volume_db: float = -4.0

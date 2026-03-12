@@ -1,6 +1,8 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://ciu5lr1li3dwk"]
 
-[ext_resource type="Script" path="res://ui/inventory_ui.gd" id="1_4n8p2"]
+[ext_resource type="Script" uid="uid://cbn6btqqmw15k" path="res://ui/inventory_ui.gd" id="1_4n8p2"]
 
-[node name="InventoryUI" type="Control"]
+[node name="InventoryUI" type="Control" unique_id=10631787]
+layout_mode = 3
+anchors_preset = 0
 script = ExtResource("1_4n8p2")

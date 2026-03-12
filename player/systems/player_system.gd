@@ -4,10 +4,28 @@ extends CharacterBody3D
 @export var mouse_sensitivity: float = 0.0025
 @export var min_pitch_degrees: float = -80.0
 @export var max_pitch_degrees: float = 75.0
+@export_file("*.fbx", "*.glb", "*.gltf", "*.tscn", "*.scn")
+var player_model_scene_path: String = "res://assets/models/player/Running.fbx"
+@export var player_model_target_height: float = 1.45
+@export var player_model_height_scale_multiplier: float = 1.0
+@export var player_model_yaw_offset_degrees: float = 180.0
+@export var player_model_vertical_offset: float = 0.0
+@export var run_animation_name: StringName = &"Running"
+@export var run_animation_fallback_names: PackedStringArray = ["Run", "run", "Running", "Take 001"]
+@export var run_animation_speed_multiplier: float = 1.0
+@export var model_move_speed_threshold: float = 0.08
+@export var first_person_eye_height: float = 1.7
+@export var third_person_distance: float = 3.2
+@export var third_person_height_offset: float = 0.25
+@export var third_person_shoulder_offset: float = 0.0
+@export var third_person_collision_buffer: float = 0.2
+@export var third_person_min_distance: float = 0.45
 
 const BASE_MOVE_SPEED: float = 7.0
+const BASE_JUMP_VELOCITY: float = 6.5
 const HOTBAR_SLOT_COUNT: int = 8
 const DROP_ONE_ACTION: StringName = &"drop_item_one"
+const CAMERA_TOGGLE_ACTION: StringName = &"toggle_camera_mode"
 const INVENTORY_GROUND_DECELERATION: float = 8.0
 const PICKUP_INTERACT_RADIUS: float = 2.0
 const PICKUP_PROMPT_TEXT: String = "Press E to pick up"
@@ -39,6 +57,9 @@ var _player_economy: PlayerEconomy = null
 
 var _player_head: Node3D = null
 var _camera: Camera3D = null
+var _player_model_root: Node3D = null
+var _player_model_anim: AnimationPlayer = null
+var _resolved_run_animation: StringName = &""
 var _camera_pitch: float = 0.0
 var _is_dead: bool = false
 var is_swimming: bool = false
@@ -50,12 +71,15 @@ var _interaction_pickup: Node3D = null
 var _is_in_deep_water: bool = false
 var gold: int = 0
 var _permanent_move_speed_bonus: float = 0.0
+var _permanent_jump_bonus_percent: float = 0.0
+var _is_third_person_view: bool = false
 
 func _ready() -> void:
 	add_to_group("player")
 	_ensure_input_map()
 	_ensure_visuals()
 	_cache_view_nodes()
+	_update_camera_mode_and_position(true)
 	_ensure_components()
 	_bind_health_signals()
 	_bind_economy_signals()
@@ -66,6 +90,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var key_event: InputEventKey = event
 		if key_event.pressed and not key_event.echo:
+			if key_event.is_action_pressed(CAMERA_TOGGLE_ACTION):
+				_toggle_camera_mode()
+				get_viewport().set_input_as_handled()
+				return
 			if not inventory_open and key_event.is_action_pressed(DROP_ONE_ACTION):
 				_drop_one_from_selected_hotbar()
 				get_viewport().set_input_as_handled()
@@ -87,15 +115,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 func _physics_process(delta: float) -> void:
+	_update_camera_mode_and_position()
 	if _is_dead:
 		velocity = Vector3.ZERO
 		_respawn_time_left -= delta
 		if _respawn_time_left <= 0.0:
 			_respawn_player()
+		_update_player_model_animation_state()
 		return
 	if get_tree().paused:
+		_update_player_model_animation_state()
 		return
 	if _movement_component == null:
+		_update_player_model_animation_state()
 		return
 	_resolve_interaction_system_refs()
 	var inventory_open: bool = _is_inventory_open()
@@ -110,6 +142,7 @@ func _physics_process(delta: float) -> void:
 		_set_interaction_prompt(false)
 		_move_with_inertia(delta)
 		_enforce_world_boundary()
+		_update_player_model_animation_state()
 		return
 	_update_interaction_target()
 	var input_vector: Vector2 = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -121,8 +154,10 @@ func _physics_process(delta: float) -> void:
 		_perform_attack()
 	if Input.is_action_just_pressed("interact"):
 		if _try_pickup_interaction():
+			_update_player_model_animation_state()
 			return
 		_try_interact()
+	_update_player_model_animation_state()
 
 func set_world_system(world_system: Node) -> void:
 	_world_system = world_system
@@ -155,6 +190,14 @@ func add_permanent_move_speed_bonus(amount: float) -> void:
 		return
 	_permanent_move_speed_bonus += amount
 
+func add_permanent_jump_bonus_percent(percent_amount: float) -> void:
+	if percent_amount <= 0.0:
+		return
+	_permanent_jump_bonus_percent += percent_amount
+	if _movement_component != null:
+		var jump_multiplier: float = 1.0 + (_permanent_jump_bonus_percent / 100.0)
+		_movement_component.jump_velocity = BASE_JUMP_VELOCITY * jump_multiplier
+
 func get_selected_hotbar_index() -> int:
 	return _selected_hotbar_index
 
@@ -177,6 +220,57 @@ func _apply_mouse_look(relative: Vector2) -> void:
 	)
 	if _player_head != null:
 		_player_head.rotation.x = _camera_pitch
+
+func _toggle_camera_mode() -> void:
+	_is_third_person_view = not _is_third_person_view
+	_update_camera_mode_and_position(true)
+
+func _update_camera_mode_and_position(force: bool = false) -> void:
+	if _camera == null or _player_head == null:
+		return
+	_set_character_visual_visibility(_is_third_person_view)
+	if not _is_third_person_view:
+		if force or _camera.position.distance_squared_to(Vector3.ZERO) > 0.000001:
+			_camera.position = Vector3.ZERO
+		return
+	var head_origin: Vector3 = _player_head.global_position
+	var distance: float = maxf(third_person_distance, third_person_min_distance)
+	var desired_local_offset: Vector3 = Vector3(
+		third_person_shoulder_offset,
+		third_person_height_offset,
+		distance
+	)
+	var desired_global_position: Vector3 = _player_head.global_transform * desired_local_offset
+	var view_vector: Vector3 = desired_global_position - head_origin
+	var desired_distance: float = view_vector.length()
+	if desired_distance <= 0.0001:
+		_camera.global_position = desired_global_position
+		return
+	var safe_distance: float = desired_distance
+	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
+	if space_state != null:
+		var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(head_origin, desired_global_position)
+		query.exclude = [self]
+		query.collide_with_areas = false
+		query.collide_with_bodies = true
+		var hit: Dictionary = space_state.intersect_ray(query)
+		if not hit.is_empty():
+			var hit_position_variant: Variant = hit.get("position", desired_global_position)
+			if hit_position_variant is Vector3:
+				var hit_position: Vector3 = hit_position_variant
+				safe_distance = clampf(
+					head_origin.distance_to(hit_position) - maxf(third_person_collision_buffer, 0.0),
+					maxf(third_person_min_distance, 0.1),
+					desired_distance
+				)
+	_camera.global_position = head_origin + view_vector.normalized() * safe_distance
+
+func _set_character_visual_visibility(is_visible: bool) -> void:
+	if _player_model_root != null and is_instance_valid(_player_model_root):
+		_player_model_root.visible = is_visible
+	var fallback_visual: Node3D = get_node_or_null("Visual") as Node3D
+	if fallback_visual != null:
+		fallback_visual.visible = is_visible
 
 func _perform_attack() -> void:
 	var hit: Dictionary = _raycast(attack_distance)
@@ -282,7 +376,8 @@ func _ensure_components() -> void:
 	_player_economy = _get_or_create_component("PlayerEconomy", "res://core/components/player_economy.gd") as PlayerEconomy
 	if _movement_component != null:
 		_movement_component.move_speed = BASE_MOVE_SPEED
-		_movement_component.jump_velocity = 6.5
+		var jump_multiplier: float = 1.0 + (_permanent_jump_bonus_percent / 100.0)
+		_movement_component.jump_velocity = BASE_JUMP_VELOCITY * jump_multiplier
 	if _health_component != null:
 		_health_component.max_health = 100.0
 		_health_component.reset_health()
@@ -442,29 +537,170 @@ func _ensure_visuals() -> void:
 		capsule.height = 1.4
 		collider.shape = capsule
 		add_child(collider)
-	if get_node_or_null("Visual") == null:
-		var visual: MeshInstance3D = MeshInstance3D.new()
-		visual.name = "Visual"
-		var mesh: CapsuleMesh = CapsuleMesh.new()
-		mesh.radius = 0.45
-		mesh.height = 1.4
-		visual.mesh = mesh
-		var material: StandardMaterial3D = StandardMaterial3D.new()
-		material.albedo_color = Color(0.2, 0.45, 0.95, 1.0)
-		material.roughness = 0.4
-		visual.material_override = material
-		add_child(visual)
-	if get_node_or_null("PlayerHead") == null:
-		var head: Node3D = Node3D.new()
+	_ensure_character_model_visual()
+	var head: Node3D = get_node_or_null("PlayerHead") as Node3D
+	if head == null:
+		head = Node3D.new()
 		head.name = "PlayerHead"
-		head.position = Vector3(0.0, 1.7, 0.0)
 		add_child(head)
+	head.position = Vector3(0.0, first_person_eye_height, 0.0)
 	if get_node_or_null("PlayerHead/Camera3D") == null:
 		var camera: Camera3D = Camera3D.new()
 		camera.name = "Camera3D"
 		camera.position = Vector3(0.0, 0.0, 0.0)
 		camera.current = true
 		get_node("PlayerHead").add_child(camera)
+
+func _ensure_character_model_visual() -> void:
+	var existing_model: Node3D = get_node_or_null("CharacterModel") as Node3D
+	if existing_model != null:
+		_player_model_root = existing_model
+		_fit_model_to_capsule(_player_model_root)
+		_player_model_root.rotation_degrees.y = player_model_yaw_offset_degrees
+		_player_model_anim = _find_animation_player_recursive(_player_model_root)
+		_resolved_run_animation = _resolve_run_animation_name(_player_model_anim)
+		var fallback_visual_existing: Node = get_node_or_null("Visual")
+		if fallback_visual_existing != null:
+			fallback_visual_existing.queue_free()
+		return
+	var model_scene: PackedScene = _load_player_model_scene()
+	if model_scene == null:
+		_ensure_fallback_capsule_visual()
+		return
+	var model_variant: Variant = model_scene.instantiate()
+	var model_root: Node3D = model_variant as Node3D
+	if model_root == null:
+		_ensure_fallback_capsule_visual()
+		return
+	model_root.name = "CharacterModel"
+	add_child(model_root)
+	_player_model_root = model_root
+	_fit_model_to_capsule(_player_model_root)
+	_player_model_root.rotation_degrees.y = player_model_yaw_offset_degrees
+	_player_model_anim = _find_animation_player_recursive(_player_model_root)
+	_resolved_run_animation = _resolve_run_animation_name(_player_model_anim)
+	if _player_model_anim != null and not _resolved_run_animation.is_empty():
+		_player_model_anim.play(_resolved_run_animation)
+		_player_model_anim.pause()
+	var fallback_visual: Node = get_node_or_null("Visual")
+	if fallback_visual != null:
+		fallback_visual.queue_free()
+
+func _ensure_fallback_capsule_visual() -> void:
+	_player_model_root = null
+	_player_model_anim = null
+	_resolved_run_animation = &""
+	if get_node_or_null("Visual") != null:
+		return
+	var visual: MeshInstance3D = MeshInstance3D.new()
+	visual.name = "Visual"
+	var mesh: CapsuleMesh = CapsuleMesh.new()
+	mesh.radius = 0.45
+	mesh.height = 1.4
+	visual.mesh = mesh
+	var material: StandardMaterial3D = StandardMaterial3D.new()
+	material.albedo_color = Color(0.2, 0.45, 0.95, 1.0)
+	material.roughness = 0.4
+	visual.material_override = material
+	add_child(visual)
+
+func _load_player_model_scene() -> PackedScene:
+	if player_model_scene_path.is_empty():
+		return null
+	var loaded: Resource = load(player_model_scene_path)
+	return loaded as PackedScene
+
+func _fit_model_to_capsule(model_root: Node3D) -> void:
+	if model_root == null:
+		return
+	var model_aabb: AABB = _compute_model_aabb(model_root)
+	if model_aabb.size.y <= 0.0001:
+		model_root.position = Vector3(0.0, player_model_vertical_offset, 0.0)
+		return
+	var target_height: float = maxf(player_model_target_height, 0.1)
+	var auto_scale: float = (target_height / model_aabb.size.y) * maxf(player_model_height_scale_multiplier, 0.001)
+	model_root.scale = Vector3.ONE * auto_scale
+	model_aabb = _compute_model_aabb(model_root)
+	model_root.position = Vector3(0.0, -model_aabb.position.y + player_model_vertical_offset, 0.0)
+
+func _compute_model_aabb(root: Node3D) -> AABB:
+	var has_any_mesh: bool = false
+	var combined: AABB = AABB()
+	for child_variant in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_node: MeshInstance3D = child_variant as MeshInstance3D
+		if mesh_node == null or mesh_node.mesh == null:
+			continue
+		var local_aabb: AABB = mesh_node.mesh.get_aabb()
+		var world_transform: Transform3D = root.global_transform.affine_inverse() * mesh_node.global_transform
+		var transformed: AABB = _transform_aabb(local_aabb, world_transform)
+		if not has_any_mesh:
+			combined = transformed
+			has_any_mesh = true
+		else:
+			combined = combined.merge(transformed)
+	return combined if has_any_mesh else AABB(Vector3.ZERO, Vector3.ONE)
+
+func _transform_aabb(local_aabb: AABB, transform: Transform3D) -> AABB:
+	var p0: Vector3 = local_aabb.position
+	var s: Vector3 = local_aabb.size
+	var corners: Array[Vector3] = [
+		p0,
+		p0 + Vector3(s.x, 0.0, 0.0),
+		p0 + Vector3(0.0, s.y, 0.0),
+		p0 + Vector3(0.0, 0.0, s.z),
+		p0 + Vector3(s.x, s.y, 0.0),
+		p0 + Vector3(s.x, 0.0, s.z),
+		p0 + Vector3(0.0, s.y, s.z),
+		p0 + s
+	]
+	var first_point: Vector3 = transform * corners[0]
+	var result: AABB = AABB(first_point, Vector3.ZERO)
+	for corner in corners:
+		result = result.expand(transform * corner)
+	return result
+
+func _find_animation_player_recursive(root: Node) -> AnimationPlayer:
+	if root == null:
+		return null
+	var direct: AnimationPlayer = root.get_node_or_null("AnimationPlayer") as AnimationPlayer
+	if direct != null:
+		return direct
+	for child_variant in root.find_children("*", "AnimationPlayer", true, false):
+		var anim_player: AnimationPlayer = child_variant as AnimationPlayer
+		if anim_player != null:
+			return anim_player
+	return null
+
+func _resolve_run_animation_name(anim_player: AnimationPlayer) -> StringName:
+	if anim_player == null:
+		return &""
+	if not run_animation_name.is_empty() and anim_player.has_animation(run_animation_name):
+		return run_animation_name
+	for fallback_name_variant in run_animation_fallback_names:
+		var fallback_name: StringName = StringName(String(fallback_name_variant))
+		if anim_player.has_animation(fallback_name):
+			return fallback_name
+	var animation_list: PackedStringArray = anim_player.get_animation_list()
+	if animation_list.is_empty():
+		return &""
+	return StringName(animation_list[0])
+
+func _update_player_model_animation_state() -> void:
+	if _player_model_anim == null or _resolved_run_animation.is_empty():
+		return
+	var horizontal_speed: float = Vector2(velocity.x, velocity.z).length()
+	var is_moving: bool = horizontal_speed > model_move_speed_threshold and not _is_dead
+	if not is_moving:
+		if _player_model_anim.is_playing():
+			_player_model_anim.pause()
+			_player_model_anim.seek(0.0, true)
+		return
+	if _player_model_anim.current_animation != _resolved_run_animation:
+		_player_model_anim.play(_resolved_run_animation, 0.08)
+	elif not _player_model_anim.is_playing():
+		_player_model_anim.play(_resolved_run_animation, 0.08)
+	var normalized_speed: float = clampf(horizontal_speed / maxf(BASE_MOVE_SPEED, 0.01), 0.65, 1.5)
+	_player_model_anim.speed_scale = normalized_speed * maxf(run_animation_speed_multiplier, 0.05)
 
 func _ensure_input_map() -> void:
 	_add_key_action("move_forward", KEY_W)
@@ -483,6 +719,7 @@ func _ensure_input_map() -> void:
 	_add_key_action("hotbar_7", KEY_7)
 	_add_key_action("hotbar_8", KEY_8)
 	_add_key_action(DROP_ONE_ACTION, KEY_Q)
+	_add_key_action(CAMERA_TOGGLE_ACTION, KEY_F3)
 
 func _add_key_action(action_name: StringName, key_code: int) -> void:
 	if not InputMap.has_action(action_name):

@@ -1,26 +1,104 @@
-[gd_scene format=3 uid="uid://cqsd7hnndu22u"]
+[gd_scene load_steps=22 format=3 uid="uid://cqsd7hnndu22u"]
 
 [ext_resource type="Script" uid="uid://bxvjund7ondqp" path="res://world/systems/world_system.gd" id="1_qo2q6"]
 [ext_resource type="Script" uid="uid://cysc4owh0wkvs" path="res://player/systems/player_system.gd" id="2_4mro7"]
 [ext_resource type="Script" path="res://ui/debug_performance_overlay.gd" id="3_s3yt0"]
 [ext_resource type="Script" path="res://ui/damage_number_pool_3d.gd" id="4_fjgh8"]
+[ext_resource type="PackedScene" path="res://assets/models/player/Running.fbx" id="5_1h23w"]
+[ext_resource type="Script" path="res://combat/combat_system.gd" id="6_tkg8k"]
+[ext_resource type="Script" path="res://resource/resource_system.gd" id="7_n0k2l"]
+[ext_resource type="Script" path="res://enemies/systems/enemy_system.gd" id="8_egv5m"]
+[ext_resource type="Script" path="res://loot/loot_system.gd" id="9_l0t72"]
+[ext_resource type="Script" path="res://inventory/inventory_system.gd" id="10_inv00"]
+[ext_resource type="Script" path="res://crafting/crafting_system.gd" id="11_crf01"]
+[ext_resource type="Script" path="res://ui/ui_system.gd" id="12_ui001"]
+[ext_resource type="Script" path="res://core/components/movement_component.gd" id="13_mv001"]
+[ext_resource type="Script" path="res://core/components/health_component.gd" id="14_hp001"]
+[ext_resource type="Script" path="res://core/components/damage_component.gd" id="15_dmg01"]
+[ext_resource type="Script" path="res://core/components/inventory_component.gd" id="16_invc1"]
+[ext_resource type="Script" path="res://core/components/ability_component.gd" id="17_abl01"]
+[ext_resource type="Script" path="res://abilities/ability_manager.gd" id="18_abm01"]
+[ext_resource type="Script" path="res://core/components/player_economy.gd" id="19_gold1"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_world_water"]
+size = Vector2(2048, 2048)
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
+radius = 0.45
+height = 1.4
 
 [node name="GameMain" type="Node3D" unique_id=580611619]
-
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1225658721]
-transform = Transform3D(0.9553365, -0.23148894, 0.18369831, 0, 0.62161, 0.7833269, -0.29552022, -0.7483408, 0.59384674, 0, 0, 0)
 
 [node name="WorldRoot" type="Node3D" parent="." unique_id=53539069]
 script = ExtResource("1_qo2q6")
 
+[node name="CombatSystem" type="Node" parent="WorldRoot"]
+script = ExtResource("6_tkg8k")
+
+[node name="ResourceSystem" type="Node" parent="WorldRoot"]
+script = ExtResource("7_n0k2l")
+
+[node name="EnemySystem" type="Node" parent="WorldRoot"]
+script = ExtResource("8_egv5m")
+
+[node name="LootSystem" type="Node" parent="WorldRoot"]
+script = ExtResource("9_l0t72")
+
+[node name="InventorySystem" type="Node" parent="WorldRoot"]
+script = ExtResource("10_inv00")
+
+[node name="CraftingSystem" type="Node" parent="WorldRoot"]
+script = ExtResource("11_crf01")
+
+[node name="UISystem" type="CanvasLayer" parent="WorldRoot"]
+script = ExtResource("12_ui001")
+
+[node name="ChunksRoot" type="Node3D" parent="WorldRoot"]
+
+[node name="SunLight" type="DirectionalLight3D" parent="WorldRoot"]
+transform = Transform3D(0.9553365, -0.23148894, 0.18369831, 0, 0.62161, 0.7833269, -0.29552022, -0.7483408, 0.59384674, 0, 0, 0)
+light_energy = 1.15
+
+[node name="SkyEnvironment" type="WorldEnvironment" parent="WorldRoot"]
+
+[node name="WaterPlane" type="MeshInstance3D" parent="WorldRoot"]
+mesh = SubResource("PlaneMesh_world_water")
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -3.5, 0)
+
 [node name="PlayerRoot" type="CharacterBody3D" parent="." unique_id=853511324]
 script = ExtResource("2_4mro7")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PlayerRoot"]
+shape = SubResource("CapsuleShape3D_player")
+
+[node name="CharacterModel" parent="PlayerRoot" instance=ExtResource("5_1h23w")]
 
 [node name="PlayerHead" type="Node3D" parent="PlayerRoot" unique_id=574760066]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
 
 [node name="Camera3D" type="Camera3D" parent="PlayerRoot/PlayerHead" unique_id=894162081]
 current = true
+
+[node name="MovementComponent" type="Node" parent="PlayerRoot"]
+script = ExtResource("13_mv001")
+
+[node name="HealthComponent" type="Node" parent="PlayerRoot"]
+script = ExtResource("14_hp001")
+
+[node name="DamageComponent" type="Node" parent="PlayerRoot"]
+script = ExtResource("15_dmg01")
+
+[node name="InventoryComponent" type="Node" parent="PlayerRoot"]
+script = ExtResource("16_invc1")
+
+[node name="AbilityComponent" type="Node" parent="PlayerRoot"]
+script = ExtResource("17_abl01")
+
+[node name="AbilityManager" type="Node" parent="PlayerRoot"]
+script = ExtResource("18_abm01")
+
+[node name="PlayerEconomy" type="Node" parent="PlayerRoot"]
+script = ExtResource("19_gold1")
 
 [node name="DebugPerformanceOverlay" type="CanvasLayer" parent="." unique_id=1407262463]
 script = ExtResource("3_s3yt0")

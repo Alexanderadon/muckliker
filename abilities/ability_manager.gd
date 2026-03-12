@@ -6,7 +6,8 @@ signal abilities_changed(abilities: Array)
 
 @export var max_health_bonus_amount: float = 5.0
 @export var movement_speed_bonus_amount: float = 1.2
-@export var available_abilities: Array[StringName] = [&"max_hp_plus_5", &"move_speed_bonus"]
+@export var jump_bonus_percent_amount: float = 5.0
+@export var available_abilities: Array[StringName] = [&"max_hp_plus_5", &"move_speed_bonus", &"jump_bonus_5_percent"]
 
 const RARITY_COLOR_BY_ID: Dictionary = {
 	"common": "#8B8B8B",
@@ -28,6 +29,11 @@ var _ability_definitions: Dictionary = {
 	"move_speed_bonus": {
 		"name": "Haste Move+",
 		"icon_text": "SPD",
+		"rarity": "rare"
+	},
+	"jump_bonus_5_percent": {
+		"name": "Spring Jump +5%",
+		"icon_text": "JMP",
 		"rarity": "rare"
 	}
 }
@@ -139,6 +145,8 @@ func _apply_ability(ability_id: StringName) -> bool:
 			return _apply_max_health_bonus()
 		"move_speed_bonus":
 			return _apply_movement_speed_bonus()
+		"jump_bonus_5_percent":
+			return _apply_jump_bonus()
 		_:
 			return false
 
@@ -171,4 +179,20 @@ func _apply_movement_speed_bonus() -> bool:
 	if movement == null:
 		return false
 	movement.move_speed += movement_speed_bonus_amount
+	return true
+
+func _apply_jump_bonus() -> bool:
+	var owner: Node = get_parent()
+	if owner == null:
+		return false
+	if owner.has_method("add_permanent_jump_bonus_percent"):
+		owner.call("add_permanent_jump_bonus_percent", jump_bonus_percent_amount)
+		return true
+	var movement: MovementComponent = owner.get_node_or_null("MovementComponent") as MovementComponent
+	if movement == null and owner.has_method("get_component"):
+		var movement_variant: Variant = owner.call("get_component", StringName("MovementComponent"))
+		movement = movement_variant as MovementComponent
+	if movement == null:
+		return false
+	movement.jump_velocity *= 1.0 + maxf(jump_bonus_percent_amount, 0.0) / 100.0
 	return true

@@ -21,6 +21,10 @@ enum TotemState {
 @export var break_animation_duration: float = 0.42
 @export var ability_capsule_spawn_height: float = 0.7
 @export var wolf_spawn_height_offset: float = 1.0
+@export var wolf_min_distance_from_player: float = 1.8
+@export var wolf_min_distance_between_wolves: float = 1.2
+@export var wolf_spawn_max_attempts: int = 12
+@export var wolf_spawn_radius_step: float = 0.6
 @export var ground_probe_up: float = 24.0
 @export var ground_probe_down: float = 72.0
 
@@ -72,6 +76,7 @@ func _spawn_wave() -> void:
 	if parent_node == null:
 		return
 	var shared_xp_reward: int = _resolve_regular_enemy_xp_reward()
+	var reserved_positions: Array[Vector3] = []
 	# Triangle formation: exactly three wolves.
 	for angle in [0.0, 120.0, 240.0]:
 		var wolf_variant: Variant = wolf_scene.instantiate()
@@ -80,7 +85,9 @@ func _spawn_wave() -> void:
 			continue
 		wolf.xp_reward = shared_xp_reward
 		parent_node.add_child(wolf)
-		wolf.global_position = _build_triangle_spawn_position(angle)
+		var spawn_position: Vector3 = _find_valid_wolf_spawn_position(float(angle), reserved_positions)
+		reserved_positions.append(spawn_position)
+		wolf.global_position = spawn_position
 		wolf.setup(_activator as Node3D, totem_id)
 		wolf.killed.connect(Callable(self, "_on_enemy_killed"))
 		_active_enemies[wolf.get_instance_id()] = true
@@ -108,10 +115,51 @@ func _resolve_regular_enemy_xp_reward() -> int:
 	return 1
 
 func _build_triangle_spawn_position(angle_degrees: float) -> Vector3:
+	return _build_spawn_position_with_radius(angle_degrees, spawn_radius)
+
+func _build_spawn_position_with_radius(angle_degrees: float, radius: float) -> Vector3:
 	var angle_rad: float = deg_to_rad(angle_degrees)
-	var offset: Vector3 = Vector3(cos(angle_rad), 0.0, sin(angle_rad)) * spawn_radius
+	var offset: Vector3 = Vector3(cos(angle_rad), 0.0, sin(angle_rad)) * radius
 	var position: Vector3 = global_position + offset
 	return _project_position_to_ground(position, wolf_spawn_height_offset)
+
+func _find_valid_wolf_spawn_position(base_angle_degrees: float, reserved_positions: Array[Vector3]) -> Vector3:
+	var attempts: int = maxi(wolf_spawn_max_attempts, 1)
+	for attempt in range(attempts):
+		var ring_index: int = int(floor(float(attempt) / 3.0))
+		var side: int = attempt % 3
+		var angle_offset: float = 0.0
+		if side == 1:
+			angle_offset = 18.0 * float(ring_index + 1)
+		elif side == 2:
+			angle_offset = -18.0 * float(ring_index + 1)
+		var attempt_radius: float = spawn_radius + float(ring_index) * maxf(wolf_spawn_radius_step, 0.1)
+		var candidate: Vector3 = _build_spawn_position_with_radius(base_angle_degrees + angle_offset, attempt_radius)
+		if _is_wolf_spawn_position_valid(candidate, reserved_positions):
+			return candidate
+	return _build_spawn_position_with_radius(
+		base_angle_degrees,
+		spawn_radius + float(int(floor(float(attempts) / 3.0)) + 1) * maxf(wolf_spawn_radius_step, 0.1)
+	)
+
+func _is_wolf_spawn_position_valid(candidate: Vector3, reserved_positions: Array[Vector3]) -> bool:
+	var min_from_player: float = maxf(wolf_min_distance_from_player, 0.0)
+	var activator_3d: Node3D = _activator as Node3D
+	if min_from_player > 0.0 and activator_3d != null and is_instance_valid(activator_3d):
+		var to_player: Vector2 = Vector2(
+			candidate.x - activator_3d.global_position.x,
+			candidate.z - activator_3d.global_position.z
+		)
+		if to_player.length() < min_from_player:
+			return false
+	var min_between: float = maxf(wolf_min_distance_between_wolves, 0.0)
+	if min_between <= 0.0:
+		return true
+	for reserved in reserved_positions:
+		var horizontal_delta: Vector2 = Vector2(candidate.x - reserved.x, candidate.z - reserved.z)
+		if horizontal_delta.length() < min_between:
+			return false
+	return true
 
 func _on_enemy_killed(enemy: TotemWolf, _killer: Node, _gold_reward: int, _xp_reward: int, enemy_totem_id: StringName) -> void:
 	if enemy_totem_id != totem_id:

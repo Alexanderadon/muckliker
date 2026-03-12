@@ -3,6 +3,7 @@ extends Node
 @export var enemy_pool_size: int = 50
 @export var max_enemies_per_chunk: int = 5
 @export var spawn_min_distance: float = 15.0
+@export var spawn_player_clearance_radius: float = 1.8
 @export var despawn_distance: float = 80.0
 @export var enemy_gold_reward_min: int = 3
 @export var enemy_gold_reward_max: int = 12
@@ -84,7 +85,8 @@ func get_active_enemy_count() -> int:
 func try_spawn_enemy(chunk_id: Vector2i, spawn_position: Vector3, chunk_root: Node3D) -> bool:
 	if _player == null or not is_instance_valid(_player):
 		return false
-	if spawn_position.distance_to(_player.global_position) < spawn_min_distance:
+	var required_clearance: float = maxf(spawn_min_distance, spawn_player_clearance_radius)
+	if _horizontal_distance_to_player(spawn_position) < required_clearance:
 		return false
 	var chunk_enemies_value: Variant = _enemies_by_chunk.get(chunk_id, [])
 	var chunk_enemies: Array = chunk_enemies_value if chunk_enemies_value is Array else []
@@ -102,6 +104,13 @@ func try_spawn_enemy(chunk_id: Vector2i, spawn_position: Vector3, chunk_root: No
 	_enemies_by_chunk[chunk_id] = chunk_enemies
 	_active_enemies.append(enemy)
 	return true
+
+func _horizontal_distance_to_player(position: Vector3) -> float:
+	if _player == null or not is_instance_valid(_player):
+		return INF
+	var dx: float = position.x - _player.global_position.x
+	var dz: float = position.z - _player.global_position.z
+	return Vector2(dx, dz).length()
 
 func on_chunk_unloaded(chunk_id: Vector2i) -> void:
 	if not _enemies_by_chunk.has(chunk_id):
