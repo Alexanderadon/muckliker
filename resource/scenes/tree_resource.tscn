@@ -1,0 +1,34 @@
+[gd_scene format=3 uid="uid://c82xo1mviwm5u"]
+
+[ext_resource type="PackedScene" uid="uid://ctvmjepofybgc" path="res://assets/models/resources/tree.fbx" id="1_tree"]
+[ext_resource type="Script" uid="uid://cfr02ug4p04um" path="res://resource/scripts/tree_resource_scene.gd" id="2_script"]
+[ext_resource type="Script" uid="uid://dbtvd7nj7dpbu" path="res://core/components/health_component.gd" id="3_health"]
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_tree_hit"]
+height = 6.3
+radius = 1.38
+
+[node name="TreeResource" type="Node3D" unique_id=2000232831]
+script = ExtResource("2_script")
+drop_origin_path = NodePath("DropOrigin")
+
+[node name="Visual" type="Node3D" parent="." unique_id=109568032]
+
+[node name="TreeModel" parent="Visual" unique_id=1646856529 instance=ExtResource("1_tree")]
+
+[node name="HitBody" type="StaticBody3D" parent="." unique_id=1843021001]
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="HitBody" unique_id=1883021002]
+position = Vector3(0, 3.15, 0)
+shape = SubResource("CylinderShape3D_tree_hit")
+
+[node name="DropOrigin" type="Node3D" parent="." unique_id=1274305101]
+position = Vector3(0, 0.9, 0)
+
+[node name="HealthComponent" type="Node" parent="." unique_id=1274305102]
+script = ExtResource("3_health")
+max_health = 3.0
+
+[node name="DebugCollision" type="Node3D" parent="." unique_id=1193603705]

@@ -307,9 +307,6 @@ func _try_interact() -> void:
 				var parent_interacted_variant: Variant = collider_parent.call("interact", self)
 				if bool(parent_interacted_variant):
 					return
-	if _world_system == null:
-		return
-	_world_system.call("harvest_resource_from_collider_with_tool", collider_variant, self, _build_tool_context())
 
 func _try_pickup_interaction() -> bool:
 	if _loot_system == null or not _loot_system.has_method("pickup_loot"):

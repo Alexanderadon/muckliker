@@ -3,18 +3,35 @@ class_name DebugPerformanceOverlay
 
 @export var update_interval_seconds: float = 0.2
 @export var worst_frame_window_seconds: float = 0.25
+@export var start_visible_in_game: bool = false
+@export var toggle_keycode: Key = KEY_F1
 
 var _label: Label = null
 var _update_accumulator: float = 0.0
 var _frame_samples: Array[Vector2] = []
 var _enemy_system: Node = null
+var _debug_visible: bool = false
 
 func _ready() -> void:
 	layer = 120
 	_ensure_overlay_ui()
-	set_process(true)
+	set_process_unhandled_input(true)
+	set_debug_visible(start_visible_in_game)
+
+func _unhandled_input(event: InputEvent) -> void:
+	var key_event: InputEventKey = event as InputEventKey
+	if key_event == null:
+		return
+	if not key_event.pressed or key_event.echo:
+		return
+	if key_event.physical_keycode != toggle_keycode:
+		return
+	set_debug_visible(not _debug_visible)
+	get_viewport().set_input_as_handled()
 
 func _process(delta: float) -> void:
+	if not _debug_visible:
+		return
 	var now_seconds: float = float(Time.get_ticks_usec()) / 1000000.0
 	var frame_time_ms: float = delta * 1000.0
 	_frame_samples.append(Vector2(now_seconds, frame_time_ms))
@@ -62,6 +79,14 @@ func _ensure_overlay_ui() -> void:
 		_label.add_theme_font_size_override("font_size", 13)
 		_label.add_theme_color_override("font_color", Color(0.86, 0.94, 0.98, 1.0))
 		panel.add_child(_label)
+
+func set_debug_visible(value: bool) -> void:
+	_debug_visible = value
+	visible = value
+	set_process(value)
+	if not value:
+		_update_accumulator = 0.0
+		_frame_samples.clear()
 
 func _refresh_label(current_frame_ms: float) -> void:
 	if _label == null:

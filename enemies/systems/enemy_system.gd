@@ -100,6 +100,7 @@ func try_spawn_enemy(chunk_id: Vector2i, spawn_position: Vector3, chunk_root: No
 	enemy.global_position = spawn_position
 	_connect_enemy_signals(enemy)
 	enemy.activate(_player, _combat_system, chunk_id)
+	enemy.set_meta("death_rewards_emitted", false)
 	chunk_enemies.append(enemy)
 	_enemies_by_chunk[chunk_id] = chunk_enemies
 	_active_enemies.append(enemy)
@@ -154,27 +155,39 @@ func _connect_enemy_signals(enemy: EnemyAI) -> void:
 func _on_enemy_died(_entity: Node, enemy: EnemyAI) -> void:
 	if enemy == null or not is_instance_valid(enemy):
 		return
-	EventBus.emit_game_event("loot_spawn_requested", {
-		"position": enemy.global_position + Vector3(0.0, 0.6, 0.0),
-		"item_id": "essence",
-		"amount": 1
-	})
 	_despawn_enemy(enemy)
 
 func _on_entity_died_event(payload: Dictionary) -> void:
 	var entity_variant: Variant = payload.get("entity", null)
-	var enemy: EnemyAI = entity_variant as EnemyAI
-	if enemy == null:
+	var entity_object: Object = entity_variant as Object
+	if entity_object == null or not is_instance_valid(entity_object):
 		return
+	if not (entity_object is Node3D):
+		return
+	var enemy_node: Node3D = entity_object as Node3D
+	if enemy_node == null:
+		return
+	if not _is_enemy_candidate(enemy_node):
+		return
+	if _handles_own_death_rewards(enemy_node):
+		return
+	if bool(enemy_node.get_meta("death_rewards_emitted", false)):
+		return
+	enemy_node.set_meta("death_rewards_emitted", true)
 	var killer_variant: Variant = payload.get("source", null)
 	var killer: Node = killer_variant as Node
+	EventBus.emit_game_event("loot_spawn_requested", {
+		"position": enemy_node.global_position + Vector3(0.0, 0.6, 0.0),
+		"item_id": "essence",
+		"amount": 1
+	})
 	var rolled_gold_reward: int = _roll_enemy_gold_reward()
 	EventBus.emit_game_event("enemy_killed", {
 		"enemy_type": "default_enemy",
 		"killer": killer,
 		"gold_reward": rolled_gold_reward,
 		"xp_reward": enemy_xp_reward,
-		"position": enemy.global_position
+		"position": enemy_node.global_position
 	})
 
 func _roll_enemy_gold_reward() -> int:
@@ -202,6 +215,7 @@ func _despawn_enemy(enemy: EnemyAI) -> void:
 		else:
 			_enemies_by_chunk[chunk_id] = chunk_enemies
 	enemy.deactivate()
+	enemy.set_meta("death_rewards_emitted", false)
 	if enemy.get_parent() != self:
 		enemy.reparent(self)
 
@@ -313,3 +327,14 @@ func _is_enemy_candidate(node: Node3D) -> bool:
 	if script_path.ends_with("totem_wolf.gd") or script_path.ends_with("totem_enemy.gd"):
 		return true
 	return false
+
+func _handles_own_death_rewards(node: Node3D) -> bool:
+	if node == null:
+		return false
+	if node.is_in_group("totem_wolf"):
+		return true
+	var script_resource: Script = node.get_script() as Script
+	if script_resource == null:
+		return false
+	var script_path: String = script_resource.resource_path.to_lower()
+	return script_path.ends_with("totem_wolf.gd")

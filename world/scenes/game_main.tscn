@@ -1,26 +1,31 @@
-[gd_scene load_steps=22 format=3 uid="uid://cqsd7hnndu22u"]
+[gd_scene format=3 uid="uid://cqsd7hnndu22u"]
 
 [ext_resource type="Script" uid="uid://bxvjund7ondqp" path="res://world/systems/world_system.gd" id="1_qo2q6"]
 [ext_resource type="Script" uid="uid://cysc4owh0wkvs" path="res://player/systems/player_system.gd" id="2_4mro7"]
-[ext_resource type="Script" path="res://ui/debug_performance_overlay.gd" id="3_s3yt0"]
-[ext_resource type="Script" path="res://ui/damage_number_pool_3d.gd" id="4_fjgh8"]
-[ext_resource type="PackedScene" path="res://assets/models/player/Running.fbx" id="5_1h23w"]
-[ext_resource type="Script" path="res://combat/combat_system.gd" id="6_tkg8k"]
-[ext_resource type="Script" path="res://resource/resource_system.gd" id="7_n0k2l"]
-[ext_resource type="Script" path="res://enemies/systems/enemy_system.gd" id="8_egv5m"]
-[ext_resource type="Script" path="res://loot/loot_system.gd" id="9_l0t72"]
-[ext_resource type="Script" path="res://inventory/inventory_system.gd" id="10_inv00"]
-[ext_resource type="Script" path="res://crafting/crafting_system.gd" id="11_crf01"]
-[ext_resource type="Script" path="res://ui/ui_system.gd" id="12_ui001"]
-[ext_resource type="Script" path="res://core/components/movement_component.gd" id="13_mv001"]
-[ext_resource type="Script" path="res://core/components/health_component.gd" id="14_hp001"]
-[ext_resource type="Script" path="res://core/components/damage_component.gd" id="15_dmg01"]
-[ext_resource type="Script" path="res://core/components/inventory_component.gd" id="16_invc1"]
-[ext_resource type="Script" path="res://core/components/ability_component.gd" id="17_abl01"]
-[ext_resource type="Script" path="res://abilities/ability_manager.gd" id="18_abm01"]
-[ext_resource type="Script" path="res://core/components/player_economy.gd" id="19_gold1"]
+[ext_resource type="Script" uid="uid://dbktxgpgxjpfm" path="res://ui/debug_performance_overlay.gd" id="3_s3yt0"]
+[ext_resource type="Script" uid="uid://ccjv62klhipu1" path="res://ui/damage_number_pool_3d.gd" id="4_fjgh8"]
+[ext_resource type="PackedScene" uid="uid://51a4r1posbvt" path="res://assets/models/player/Running.fbx" id="5_1h23w"]
+[ext_resource type="Script" uid="uid://cxrmd0ipwwrnh" path="res://combat/combat_system.gd" id="6_tkg8k"]
+[ext_resource type="Script" uid="uid://bilpq4d5cadtw" path="res://resource/resource_system.gd" id="7_n0k2l"]
+[ext_resource type="Script" uid="uid://pbmfnrivbs4p" path="res://enemies/systems/enemy_system.gd" id="8_egv5m"]
+[ext_resource type="Script" uid="uid://dy8la8aemgcco" path="res://loot/loot_system.gd" id="9_l0t72"]
+[ext_resource type="Script" uid="uid://hmmqa020166r" path="res://inventory/inventory_system.gd" id="10_inv00"]
+[ext_resource type="Script" uid="uid://2mddeywgj43n" path="res://crafting/crafting_system.gd" id="11_crf01"]
+[ext_resource type="Script" uid="uid://qd280gc2lndw" path="res://ui/ui_system.gd" id="12_ui001"]
+[ext_resource type="Script" path="res://debug/xray_debug_system.gd" id="13_xray0"]
+[ext_resource type="Script" uid="uid://dxdngjlku4uar" path="res://core/components/movement_component.gd" id="13_mv001"]
+[ext_resource type="Script" uid="uid://dbtvd7nj7dpbu" path="res://core/components/health_component.gd" id="14_hp001"]
+[ext_resource type="Script" uid="uid://dt2lbwuicc2fn" path="res://core/components/damage_component.gd" id="15_dmg01"]
+[ext_resource type="Script" uid="uid://bdvqhritn2pe8" path="res://core/components/inventory_component.gd" id="16_invc1"]
+[ext_resource type="Script" uid="uid://cvrrr3n4jxp0l" path="res://core/components/ability_component.gd" id="17_abl01"]
+[ext_resource type="Script" uid="uid://ciu26qqxefmm0" path="res://abilities/ability_manager.gd" id="18_abm01"]
+[ext_resource type="Script" uid="uid://o7d8l1vytlyx" path="res://core/components/player_economy.gd" id="19_gold1"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8fc0k"]
+albedo_color = Color(0.11873675, 0.5452515, 0.99223155, 1)
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_world_water"]
+material = SubResource("StandardMaterial3D_8fc0k")
 size = Vector2(2048, 2048)
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
@@ -31,47 +36,56 @@ height = 1.4
 
 [node name="WorldRoot" type="Node3D" parent="." unique_id=53539069]
 script = ExtResource("1_qo2q6")
+terrain_grass_color = Color(0.133333, 0.552941, 0.337255, 1)
+terrain_sand_color = Color(1, 0.929412, 0.52549, 1)
 
-[node name="CombatSystem" type="Node" parent="WorldRoot"]
+[node name="CombatSystem" type="Node" parent="WorldRoot" unique_id=639790821]
 script = ExtResource("6_tkg8k")
 
-[node name="ResourceSystem" type="Node" parent="WorldRoot"]
+[node name="ResourceSystem" type="Node" parent="WorldRoot" unique_id=373070978]
 script = ExtResource("7_n0k2l")
+tree_trunk_radius = 0.28
+tree_trunk_height = 2.3
+tree_trunk_offset_y = 1.15
+tree_base_block_radius = 0.34
+tree_base_block_height = 0.72
+tree_base_block_offset_y = 0.36
 
-[node name="EnemySystem" type="Node" parent="WorldRoot"]
+[node name="EnemySystem" type="Node" parent="WorldRoot" unique_id=213937051]
 script = ExtResource("8_egv5m")
 
-[node name="LootSystem" type="Node" parent="WorldRoot"]
+[node name="LootSystem" type="Node" parent="WorldRoot" unique_id=1628909858]
 script = ExtResource("9_l0t72")
 
-[node name="InventorySystem" type="Node" parent="WorldRoot"]
+[node name="InventorySystem" type="Node" parent="WorldRoot" unique_id=578326622]
 script = ExtResource("10_inv00")
 
-[node name="CraftingSystem" type="Node" parent="WorldRoot"]
+[node name="CraftingSystem" type="Node" parent="WorldRoot" unique_id=1182590419]
 script = ExtResource("11_crf01")
 
-[node name="UISystem" type="CanvasLayer" parent="WorldRoot"]
+[node name="UISystem" type="CanvasLayer" parent="WorldRoot" unique_id=1502293814]
 script = ExtResource("12_ui001")
 
-[node name="ChunksRoot" type="Node3D" parent="WorldRoot"]
+[node name="ChunksRoot" type="Node3D" parent="WorldRoot" unique_id=158279483]
 
-[node name="SunLight" type="DirectionalLight3D" parent="WorldRoot"]
+[node name="SunLight" type="DirectionalLight3D" parent="WorldRoot" unique_id=303653340]
 transform = Transform3D(0.9553365, -0.23148894, 0.18369831, 0, 0.62161, 0.7833269, -0.29552022, -0.7483408, 0.59384674, 0, 0, 0)
 light_energy = 1.15
 
-[node name="SkyEnvironment" type="WorldEnvironment" parent="WorldRoot"]
+[node name="SkyEnvironment" type="WorldEnvironment" parent="WorldRoot" unique_id=764842899]
 
-[node name="WaterPlane" type="MeshInstance3D" parent="WorldRoot"]
+[node name="WaterPlane" type="MeshInstance3D" parent="WorldRoot" unique_id=1484780004]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -31.99881, 146.91364, -605.6138)
 mesh = SubResource("PlaneMesh_world_water")
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -3.5, 0)
 
 [node name="PlayerRoot" type="CharacterBody3D" parent="." unique_id=853511324]
 script = ExtResource("2_4mro7")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PlayerRoot"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PlayerRoot" unique_id=69055260]
 shape = SubResource("CapsuleShape3D_player")
+debug_color = Color(0, 0.6, 0.69803923, 0.8901961)
 
-[node name="CharacterModel" parent="PlayerRoot" instance=ExtResource("5_1h23w")]
+[node name="CharacterModel" parent="PlayerRoot" unique_id=671952333 instance=ExtResource("5_1h23w")]
 
 [node name="PlayerHead" type="Node3D" parent="PlayerRoot" unique_id=574760066]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
@@ -79,29 +93,33 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
 [node name="Camera3D" type="Camera3D" parent="PlayerRoot/PlayerHead" unique_id=894162081]
 current = true
 
-[node name="MovementComponent" type="Node" parent="PlayerRoot"]
+[node name="MovementComponent" type="Node" parent="PlayerRoot" unique_id=549213863]
 script = ExtResource("13_mv001")
 
-[node name="HealthComponent" type="Node" parent="PlayerRoot"]
+[node name="HealthComponent" type="Node" parent="PlayerRoot" unique_id=397776518]
 script = ExtResource("14_hp001")
 
-[node name="DamageComponent" type="Node" parent="PlayerRoot"]
+[node name="DamageComponent" type="Node" parent="PlayerRoot" unique_id=1108871717]
 script = ExtResource("15_dmg01")
 
-[node name="InventoryComponent" type="Node" parent="PlayerRoot"]
+[node name="InventoryComponent" type="Node" parent="PlayerRoot" unique_id=181392544]
 script = ExtResource("16_invc1")
 
-[node name="AbilityComponent" type="Node" parent="PlayerRoot"]
+[node name="AbilityComponent" type="Node" parent="PlayerRoot" unique_id=193934480]
 script = ExtResource("17_abl01")
 
-[node name="AbilityManager" type="Node" parent="PlayerRoot"]
+[node name="AbilityManager" type="Node" parent="PlayerRoot" unique_id=51670135]
 script = ExtResource("18_abm01")
 
-[node name="PlayerEconomy" type="Node" parent="PlayerRoot"]
+[node name="PlayerEconomy" type="Node" parent="PlayerRoot" unique_id=909464424]
 script = ExtResource("19_gold1")
 
 [node name="DebugPerformanceOverlay" type="CanvasLayer" parent="." unique_id=1407262463]
 script = ExtResource("3_s3yt0")
+start_visible_in_game = false
 
 [node name="DamageNumberPool3D" type="Node3D" parent="." unique_id=203841901]
 script = ExtResource("4_fjgh8")
+
+[node name="XRayDebugSystem" type="Node3D" parent="." unique_id=203841902]
+script = ExtResource("13_xray0")

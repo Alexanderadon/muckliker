@@ -6,6 +6,12 @@ const ChunkDataModel = preload("res://world/systems/chunk_data.gd")
 @export var terrain_height_scale: float = 10.0
 @export var max_spawn_operations_per_frame: int = 10
 @export var max_chunk_loads_per_frame: int = 1
+@export var max_chunk_unloads_per_frame: int = 1
+@export var prefetch_distance_chunks: int = 1
+@export var streaming_spawn_operations_per_frame: int = 3
+@export var terrain_grass_color: Color = Color8(34, 141, 86, 255) # 228D56
+@export var terrain_sand_color: Color = Color8(255, 237, 134, 255) # FFED86
+@export var terrain_shore_sand_height_offset: float = 2.4
 @export var player_path: NodePath = NodePath("../PlayerRoot")
 @export var totem_scene: PackedScene = preload("res://totem/totem.tscn")
 @export var totem_spawn_chance_per_chunk: float = 0.08
@@ -33,7 +39,6 @@ const FOG_DEPTH_BEGIN: float = 260.0
 const FOG_DEPTH_END: float = 980.0
 const FOG_DENSITY: float = 0.0025
 const MAX_FPS_LIMIT: int = 240
-
 var world_seed: int = 0
 var _last_player_chunk: Vector2i = Vector2i(2147483647, 2147483647)
 
@@ -51,8 +56,11 @@ var _chunk_data_store: Dictionary = {}
 var _pending_spawn_operations: Array[Dictionary] = []
 var _pending_chunk_loads: Array[Vector2i] = []
 var _pending_chunk_load_lookup: Dictionary = {}
+var _pending_chunk_unloads: Array[Vector2i] = []
+var _pending_chunk_unload_lookup: Dictionary = {}
 
 var _chunks_root: Node3D = null
+var _terrain_colored_material: Material = null
 var _combat_system: Node = null
 var _resource_system: Node = null
 var _enemy_system: Node = null
@@ -80,6 +88,7 @@ func _ready() -> void:
 	else:
 		_last_player_chunk = _chunk_id_from_position(Vector3.ZERO)
 		_update_chunks(Vector3.ZERO, true)
+	_refresh_loaded_chunk_terrain_visuals()
 	_process_spawn_operations()
 	if game_state != null and game_state.has_method("set_state"):
 		game_state.call("set_state", "playing")
@@ -97,8 +106,12 @@ func _process(_delta: float) -> void:
 	if player_chunk != _last_player_chunk:
 		_last_player_chunk = player_chunk
 		_update_chunks(player_position)
+	_process_chunk_unload_queue()
 	_process_chunk_load_queue()
-	_process_spawn_operations()
+	if _pending_chunk_loads.is_empty():
+		_process_spawn_operations()
+	else:
+		_process_spawn_operations(mini(streaming_spawn_operations_per_frame, max_spawn_operations_per_frame))
 	DebugProfiler.end_sample("world.process")
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -202,6 +215,7 @@ func _initialize_world_nodes() -> void:
 		_chunks_root = Node3D.new()
 		_chunks_root.name = "ChunksRoot"
 		add_child(_chunks_root)
+	_terrain_colored_material = null
 	_ensure_lighting()
 	var water: MeshInstance3D = get_node_or_null("WaterPlane") as MeshInstance3D
 	if water == null:
@@ -278,7 +292,6 @@ func _configure_water_surface(water: MeshInstance3D) -> void:
 	water_material.albedo_color = material_color
 	water_material.roughness = 0.6
 	water_material.metallic = 0.0
-	water_material.specular = 0.1
 	water.material_override = water_material
 
 func _compute_water_plane_size() -> float:
@@ -367,27 +380,34 @@ func _get_or_create_system(node_name: String, script_path: String) -> Node:
 
 func _update_chunks(player_position: Vector3, immediate_load: bool = false) -> void:
 	var player_chunk := _chunk_id_from_position(player_position)
-	var required_chunks: Array[Vector2i] = ChunkMath.build_required_chunks(player_chunk, _view_distance_chunks)
+	var preload_radius: int = _view_distance_chunks
+	if not immediate_load:
+		preload_radius += maxi(prefetch_distance_chunks, 0)
+	var required_chunks: Array[Vector2i] = ChunkMath.build_required_chunks(player_chunk, preload_radius)
 	var required_lookup := {}
 	for chunk_id in required_chunks:
 		required_lookup[chunk_id] = true
+		_remove_pending_chunk_unload(chunk_id)
 		if not _loaded_chunks.has(chunk_id):
 			if immediate_load:
 				_load_chunk(chunk_id)
 			else:
 				_enqueue_chunk_load(chunk_id)
 	_drop_stale_pending_chunk_loads(required_lookup)
+	_drop_stale_pending_chunk_unloads(required_lookup)
 	for loaded_chunk_key in _loaded_chunks.keys().duplicate():
 		if not (loaded_chunk_key is Vector2i):
 			continue
 		var loaded_chunk: Vector2i = loaded_chunk_key
 		if not required_lookup.has(loaded_chunk):
-			_unload_chunk(loaded_chunk)
-	if _loaded_chunks.size() > _max_active_chunks:
-		var overflow := _loaded_chunks.size() - _max_active_chunks
+			_enqueue_chunk_unload(loaded_chunk)
+	var required_capacity: int = (preload_radius * 2 + 1) * (preload_radius * 2 + 1)
+	var effective_max_active_chunks: int = maxi(_max_active_chunks, required_capacity)
+	if _loaded_chunks.size() > effective_max_active_chunks:
+		var overflow := _loaded_chunks.size() - effective_max_active_chunks
 		for i in range(overflow):
 			var farthest_chunk := _find_farthest_chunk(player_chunk)
-			_unload_chunk(farthest_chunk)
+			_enqueue_chunk_unload(farthest_chunk)
 	_update_chunk_lod(player_chunk)
 	_trim_chunk_data_cache(player_chunk)
 
@@ -397,6 +417,7 @@ func _chunk_id_from_position(world_position: Vector3) -> Vector2i:
 func _load_chunk(chunk_id: Vector2i) -> void:
 	if _loaded_chunks.has(chunk_id):
 		return
+	_remove_pending_chunk_unload(chunk_id)
 	var chunk_data = _get_or_create_chunk_data(chunk_id)
 	chunk_data.touch()
 	var chunk_root := Node3D.new()
@@ -405,13 +426,17 @@ func _load_chunk(chunk_id: Vector2i) -> void:
 	_chunks_root.add_child(chunk_root)
 	_loaded_chunks[chunk_id] = chunk_root
 	_spawn_chunk_terrain(chunk_id, chunk_root)
-	_queue_chunk_spawns(chunk_id, chunk_data)
+	var should_queue_spawns: bool = _should_queue_spawns_for_chunk(chunk_id)
+	chunk_root.set_meta("spawns_queued", should_queue_spawns)
+	if should_queue_spawns:
+		_queue_chunk_spawns(chunk_id, chunk_data)
 	EventBus.emit_game_event("chunk_loaded", {
 		"chunk_id": chunk_id,
 		"seed": chunk_data.seed
 	})
 
 func _unload_chunk(chunk_id: Vector2i) -> void:
+	_remove_pending_chunk_unload(chunk_id)
 	if not _loaded_chunks.has(chunk_id):
 		return
 	var chunk_data = _get_or_create_chunk_data(chunk_id)
@@ -441,6 +466,27 @@ func _enqueue_chunk_load(chunk_id: Vector2i) -> void:
 	_pending_chunk_load_lookup[chunk_id] = true
 	_pending_chunk_loads.append(chunk_id)
 
+func _enqueue_chunk_unload(chunk_id: Vector2i) -> void:
+	if not _loaded_chunks.has(chunk_id):
+		return
+	if _pending_chunk_unload_lookup.has(chunk_id):
+		return
+	_pending_chunk_unload_lookup[chunk_id] = true
+	_pending_chunk_unloads.append(chunk_id)
+
+func _process_chunk_unload_queue() -> void:
+	if _pending_chunk_unloads.is_empty():
+		return
+	var unloads_done: int = 0
+	var unload_budget: int = maxi(max_chunk_unloads_per_frame, 1)
+	while unloads_done < unload_budget and not _pending_chunk_unloads.is_empty():
+		var chunk_id: Vector2i = _pending_chunk_unloads.pop_front()
+		_pending_chunk_unload_lookup.erase(chunk_id)
+		if not _loaded_chunks.has(chunk_id):
+			continue
+		_unload_chunk(chunk_id)
+		unloads_done += 1
+
 func _process_chunk_load_queue() -> void:
 	if _pending_chunk_loads.is_empty():
 		return
@@ -466,6 +512,21 @@ func _drop_stale_pending_chunk_loads(required_lookup: Dictionary) -> void:
 	_pending_chunk_loads = retained
 	_pending_chunk_load_lookup = retained_lookup
 
+func _drop_stale_pending_chunk_unloads(required_lookup: Dictionary) -> void:
+	if _pending_chunk_unloads.is_empty():
+		return
+	var retained: Array[Vector2i] = []
+	var retained_lookup: Dictionary = {}
+	for chunk_id in _pending_chunk_unloads:
+		if required_lookup.has(chunk_id):
+			continue
+		if not _loaded_chunks.has(chunk_id):
+			continue
+		retained.append(chunk_id)
+		retained_lookup[chunk_id] = true
+	_pending_chunk_unloads = retained
+	_pending_chunk_unload_lookup = retained_lookup
+
 func _remove_pending_chunk_load(chunk_id: Vector2i) -> void:
 	if not _pending_chunk_load_lookup.has(chunk_id):
 		return
@@ -473,6 +534,14 @@ func _remove_pending_chunk_load(chunk_id: Vector2i) -> void:
 	var pending_index: int = _pending_chunk_loads.find(chunk_id)
 	if pending_index >= 0:
 		_pending_chunk_loads.remove_at(pending_index)
+
+func _remove_pending_chunk_unload(chunk_id: Vector2i) -> void:
+	if not _pending_chunk_unload_lookup.has(chunk_id):
+		return
+	_pending_chunk_unload_lookup.erase(chunk_id)
+	var pending_index: int = _pending_chunk_unloads.find(chunk_id)
+	if pending_index >= 0:
+		_pending_chunk_unloads.remove_at(pending_index)
 
 func _find_farthest_chunk(player_chunk: Vector2i) -> Vector2i:
 	var farthest_chunk := player_chunk
@@ -488,7 +557,8 @@ func _find_farthest_chunk(player_chunk: Vector2i) -> Vector2i:
 	return farthest_chunk
 
 func _update_chunk_lod(player_chunk: Vector2i) -> void:
-	var cull_distance_squared: float = float(_lod_cull_distance_chunks * _lod_cull_distance_chunks)
+	var visible_distance_chunks: int = mini(_lod_cull_distance_chunks, _view_distance_chunks)
+	var cull_distance_squared: float = float(visible_distance_chunks * visible_distance_chunks)
 	for chunk_key in _loaded_chunks.keys():
 		if not (chunk_key is Vector2i):
 			continue
@@ -498,7 +568,17 @@ func _update_chunk_lod(player_chunk: Vector2i) -> void:
 		if chunk_root == null:
 			continue
 		var is_within_lod: bool = float(chunk_id.distance_squared_to(player_chunk)) <= cull_distance_squared
+		if is_within_lod and not bool(chunk_root.get_meta("spawns_queued", false)):
+			var chunk_data = _get_or_create_chunk_data(chunk_id)
+			_queue_chunk_spawns(chunk_id, chunk_data)
+			chunk_root.set_meta("spawns_queued", true)
 		_set_chunk_lod_state(chunk_root, is_within_lod)
+
+func _should_queue_spawns_for_chunk(chunk_id: Vector2i) -> bool:
+	var prefetch_chunks: int = maxi(prefetch_distance_chunks, 0)
+	var spawn_distance_chunks: int = _view_distance_chunks + prefetch_chunks
+	var spawn_distance_chunks_squared: float = float(spawn_distance_chunks * spawn_distance_chunks)
+	return float(chunk_id.distance_squared_to(_last_player_chunk)) <= spawn_distance_chunks_squared
 
 func _set_chunk_lod_state(chunk_root: Node3D, visible_in_lod: bool) -> void:
 	var currently_culled: bool = bool(chunk_root.get_meta("lod_culled", false))
@@ -506,8 +586,22 @@ func _set_chunk_lod_state(chunk_root: Node3D, visible_in_lod: bool) -> void:
 	if currently_culled == target_culled:
 		return
 	chunk_root.set_meta("lod_culled", target_culled)
-	chunk_root.visible = visible_in_lod
-	_set_chunk_collision_enabled(chunk_root, visible_in_lod)
+	# Keep terrain visible at all times to avoid distant chunk cut lines.
+	chunk_root.visible = true
+	_set_chunk_gameplay_nodes_lod_state(chunk_root, visible_in_lod)
+
+func _set_chunk_gameplay_nodes_lod_state(chunk_root: Node3D, visible_in_lod: bool) -> void:
+	for child_variant in chunk_root.get_children():
+		if not (child_variant is Node):
+			continue
+		var child: Node = child_variant
+		if child.name == "GroundBody":
+			# Terrain mesh stays visible and collidable to keep horizon continuous.
+			continue
+		if child is Node3D:
+			var child_3d: Node3D = child
+			child_3d.visible = visible_in_lod
+		_set_chunk_collision_enabled(child, visible_in_lod)
 
 func _set_chunk_collision_enabled(node: Node, enabled: bool) -> void:
 	for child_variant in node.get_children():
@@ -520,7 +614,12 @@ func _set_chunk_collision_enabled(node: Node, enabled: bool) -> void:
 		_set_chunk_collision_enabled(child, enabled)
 
 func _spawn_chunk_terrain(chunk_id: Vector2i, chunk_root: Node3D) -> void:
-	var terrain_mesh: ArrayMesh = _terrain_generator.build_chunk_mesh(chunk_id, chunk_size, _terrain_resolution)
+	var existing_ground: Node = chunk_root.get_node_or_null("GroundBody")
+	if existing_ground != null:
+		chunk_root.remove_child(existing_ground)
+		existing_ground.queue_free()
+	var terrain_mesh_raw: ArrayMesh = _terrain_generator.build_chunk_mesh(chunk_id, chunk_size, _terrain_resolution)
+	var terrain_mesh: ArrayMesh = _build_terrain_mesh_with_palette(terrain_mesh_raw)
 	var ground_body := StaticBody3D.new()
 	ground_body.name = "GroundBody"
 	ground_body.position = Vector3(float(chunk_id.x * chunk_size), 0.0, float(chunk_id.y * chunk_size))
@@ -528,17 +627,95 @@ func _spawn_chunk_terrain(chunk_id: Vector2i, chunk_root: Node3D) -> void:
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.mesh = terrain_mesh
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(0.2, 0.6, 0.24, 1.0)
-	material.roughness = 0.98
-	mesh_instance.material_override = material
+	_apply_terrain_material_to_mesh_instance(mesh_instance, terrain_mesh.get_surface_count())
 	ground_body.add_child(mesh_instance)
 
 	var collider := CollisionShape3D.new()
 	var shape := ConcavePolygonShape3D.new()
-	shape.set_faces(terrain_mesh.get_faces())
+	shape.set_faces(terrain_mesh_raw.get_faces())
 	collider.shape = shape
 	ground_body.add_child(collider)
+
+func _refresh_loaded_chunk_terrain_visuals() -> void:
+	for chunk_key in _loaded_chunks.keys():
+		if not (chunk_key is Vector2i):
+			continue
+		var chunk_id: Vector2i = chunk_key
+		var chunk_root_variant: Variant = _loaded_chunks[chunk_id]
+		var chunk_root: Node3D = chunk_root_variant as Node3D
+		if chunk_root == null:
+			continue
+		_spawn_chunk_terrain(chunk_id, chunk_root)
+
+func _build_terrain_mesh_with_palette(source_mesh: ArrayMesh) -> ArrayMesh:
+	if source_mesh == null or source_mesh.get_surface_count() <= 0:
+		return source_mesh
+	var source_arrays_variant: Variant = source_mesh.surface_get_arrays(0)
+	if not (source_arrays_variant is Array):
+		return source_mesh
+	var source_arrays: Array = source_arrays_variant
+	if source_arrays.size() < Mesh.ARRAY_MAX:
+		return source_mesh
+	var vertices_variant: Variant = source_arrays[Mesh.ARRAY_VERTEX]
+	var normals_variant: Variant = source_arrays[Mesh.ARRAY_NORMAL]
+	var uvs_variant: Variant = source_arrays[Mesh.ARRAY_TEX_UV]
+	var indices_variant: Variant = source_arrays[Mesh.ARRAY_INDEX]
+	if not (vertices_variant is PackedVector3Array) or not (indices_variant is PackedInt32Array):
+		return source_mesh
+	var vertices: PackedVector3Array = PackedVector3Array(vertices_variant)
+	var normals: PackedVector3Array = PackedVector3Array(normals_variant) if normals_variant is PackedVector3Array else PackedVector3Array()
+	var uvs: PackedVector2Array = PackedVector2Array(uvs_variant) if uvs_variant is PackedVector2Array else PackedVector2Array()
+	var indices: PackedInt32Array = PackedInt32Array(indices_variant)
+	if vertices.is_empty():
+		return source_mesh
+	if normals.size() != vertices.size():
+		normals.resize(vertices.size())
+		for i in range(vertices.size()):
+			normals[i] = Vector3.UP
+
+	var grass_color: Color = terrain_grass_color
+	var sand_color: Color = terrain_sand_color
+	var shore_sand_height: float = WATER_LEVEL + terrain_shore_sand_height_offset
+	var colors: PackedColorArray = PackedColorArray()
+	colors.resize(vertices.size())
+	for i in range(vertices.size()):
+		var vertex_y: float = vertices[i].y
+		colors[i] = sand_color if vertex_y <= shore_sand_height else grass_color
+
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	if not uvs.is_empty():
+		arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh: ArrayMesh = ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+func _apply_terrain_material_to_mesh_instance(mesh_instance: MeshInstance3D, surface_count: int) -> void:
+	if mesh_instance == null:
+		return
+	var material: Material = _resolve_terrain_colored_material()
+	mesh_instance.material_override = material
+	var resolved_surface_count: int = maxi(surface_count, 1)
+	for surface_idx in range(resolved_surface_count):
+		mesh_instance.set_surface_override_material(surface_idx, material)
+
+func _resolve_terrain_colored_material() -> Material:
+	if _terrain_colored_material != null:
+		return _terrain_colored_material
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	material.vertex_color_use_as_albedo = true
+	# Vertex colors are authored from hex/sRGB values; keep their on-screen color faithful.
+	material.vertex_color_is_srgb = true
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+	material.roughness = 1.0
+	material.metallic = 0.0
+	_terrain_colored_material = material
+	return _terrain_colored_material
 
 func _queue_chunk_spawns(chunk_id: Vector2i, chunk_data = null) -> void:
 	if chunk_data == null:
@@ -618,9 +795,11 @@ func _queue_totem_spawn_for_chunk(chunk_id: Vector2i, rng: RandomNumberGenerator
 		"totem_id": "totem_%s_%s" % [chunk_id.x, chunk_id.y]
 	})
 
-func _process_spawn_operations() -> void:
+func _process_spawn_operations(operation_budget: int = -1) -> void:
 	var operations_done := 0
-	while operations_done < max_spawn_operations_per_frame and not _pending_spawn_operations.is_empty():
+	var budget: int = max_spawn_operations_per_frame if operation_budget <= 0 else operation_budget
+	budget = maxi(budget, 1)
+	while operations_done < budget and not _pending_spawn_operations.is_empty():
 		var operation: Dictionary = _pending_spawn_operations.pop_front()
 		_execute_spawn_operation(operation)
 		operations_done += 1

@@ -2,7 +2,7 @@ extends Area3D
 class_name AbilityCapsule
 
 signal collected(ability_id: StringName, collector: Node)
-const DEFAULT_PICKUP_SOUND_PATH: String = "res://assets/audio/ui/ability_capsule_pickup.wav"
+const DEFAULT_PICKUP_SOUND_PATH: String = "res://assets/audio/ui/ability_capsule_pickup.mp3"
 
 @export var ability_pool: Array[StringName] = [&"max_hp_plus_5", &"move_speed_bonus", &"jump_bonus_5_percent"]
 @export var pickup_sound: AudioStream = null
@@ -27,6 +27,7 @@ func _ready() -> void:
 	_ensure_visuals()
 	_ensure_audio_player()
 	_try_assign_default_pickup_sound()
+	_configure_audio_player()
 	if _has_spawn_world_position:
 		global_position = _spawn_world_position
 	_base_y = global_position.y + hover_base_height
@@ -131,6 +132,13 @@ func _ensure_audio_player() -> void:
 		_pickup_audio_player.name = "PickupAudioPlayer"
 		add_child(_pickup_audio_player)
 
+func _configure_audio_player() -> void:
+	if _pickup_audio_player == null:
+		return
+	_pickup_audio_player.stream = pickup_sound
+	_pickup_audio_player.bus = String(pickup_sound_bus)
+	_pickup_audio_player.volume_db = pickup_sound_volume_db
+
 func _finalize_collection() -> void:
 	set_deferred("monitoring", false)
 	set_deferred("monitorable", false)
@@ -152,14 +160,12 @@ func _finalize_collection() -> void:
 	if _pickup_audio_player == null:
 		queue_free()
 		return
-	_pickup_audio_player.stream = pickup_sound
-	_pickup_audio_player.bus = String(pickup_sound_bus)
-	_pickup_audio_player.volume_db = pickup_sound_volume_db
+	_configure_audio_player()
 	var finished_callback: Callable = Callable(self, "_on_pickup_sound_finished")
 	if _pickup_audio_player.finished.is_connected(finished_callback):
 		_pickup_audio_player.finished.disconnect(finished_callback)
 	_pickup_audio_player.finished.connect(finished_callback, CONNECT_ONE_SHOT)
-	_pickup_audio_player.play()
+	_pickup_audio_player.play(0.0)
 
 func _on_pickup_sound_finished() -> void:
 	queue_free()
@@ -167,15 +173,9 @@ func _on_pickup_sound_finished() -> void:
 func _try_assign_default_pickup_sound() -> void:
 	if pickup_sound != null:
 		return
-	var import_meta_path: String = "%s.import" % DEFAULT_PICKUP_SOUND_PATH
-	if FileAccess.file_exists(import_meta_path):
-		var import_config: ConfigFile = ConfigFile.new()
-		if import_config.load(import_meta_path) == OK:
-			var remapped_path: String = String(import_config.get_value("remap", "path", ""))
-			if remapped_path != "" and not FileAccess.file_exists(remapped_path):
-				return
-	if not ResourceLoader.exists(DEFAULT_PICKUP_SOUND_PATH):
+	if not FileAccess.file_exists(DEFAULT_PICKUP_SOUND_PATH):
 		return
 	var loaded_stream: AudioStream = load(DEFAULT_PICKUP_SOUND_PATH) as AudioStream
 	if loaded_stream != null:
 		pickup_sound = loaded_stream
+		_configure_audio_player()

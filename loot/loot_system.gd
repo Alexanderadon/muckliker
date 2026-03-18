@@ -1,5 +1,7 @@
 extends Node
 
+const DEBUG_LOOT_SPAWN_EVENTS: bool = false
+
 @export var loot_pool_size: int = 220
 @export var max_spawn_operations_per_frame: int = 10
 @export var pickup_distance: float = 2.0
@@ -21,6 +23,8 @@ const LOOT_SETTLE_SLOPE_DEGREES: float = 10.0
 const LOOT_GROUND_RAYCAST_DISTANCE: float = 1.5
 const LOOT_BOUNCE: float = 0.2
 const LOOT_FRICTION: float = 1.0
+const LOOT_COLLISION_LAYER: int = 1
+const LOOT_COLLISION_MASK: int = 1
 
 var _player: Node3D = null
 var _inventory_system: Node = null
@@ -71,6 +75,12 @@ func get_debug_counts() -> Dictionary:
 	}
 
 func _on_loot_spawn_requested(payload: Dictionary) -> void:
+	if DEBUG_LOOT_SPAWN_EVENTS:
+		print("[LootSystem] loot_spawn_requested item_id=%s amount=%s position=%s" % [
+			String(payload.get("item_id", "")),
+			str(payload.get("amount", 0)),
+			str(payload.get("position", Vector3.ZERO))
+		])
 	_pending_spawns.append(payload)
 
 func _process_pending_spawns() -> void:
@@ -86,9 +96,12 @@ func _spawn_loot(payload: Dictionary) -> bool:
 		return false
 	var rigid_loot: RigidBody3D = loot as RigidBody3D
 	if rigid_loot != null:
+		rigid_loot.collision_layer = LOOT_COLLISION_LAYER
+		rigid_loot.collision_mask = LOOT_COLLISION_MASK
 		rigid_loot.freeze = true
 		rigid_loot.linear_velocity = Vector3.ZERO
 		rigid_loot.angular_velocity = Vector3.ZERO
+	_set_loot_collision_enabled(loot, true)
 	var position_variant: Variant = payload.get("position", Vector3.ZERO)
 	var item_id_variant: Variant = payload.get("item_id", "unknown")
 	var amount_variant: Variant = payload.get("amount", 1)
@@ -209,6 +222,8 @@ func _create_loot_node() -> Node3D:
 	var loot := RigidBody3D.new()
 	loot.name = "Loot"
 	loot.add_to_group("loot_pickup")
+	loot.collision_layer = LOOT_COLLISION_LAYER
+	loot.collision_mask = LOOT_COLLISION_MASK
 	loot.freeze = true
 	loot.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	loot.gravity_scale = 1.0
@@ -282,11 +297,11 @@ func _apply_loot_mesh(visual: MeshInstance3D, item_id: String) -> void:
 		return
 	if item_id == "wood":
 		var wood_mesh: CylinderMesh = CylinderMesh.new()
-		wood_mesh.top_radius = 0.09
-		wood_mesh.bottom_radius = 0.1
-		wood_mesh.height = 0.52
+		wood_mesh.top_radius = 0.08
+		wood_mesh.bottom_radius = 0.095
+		wood_mesh.height = 0.9
 		visual.mesh = wood_mesh
-		visual.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+		visual.rotation_degrees = Vector3(90.0, 0.0, 12.0)
 		return
 	if item_id == "stone":
 		var stone_mesh: SphereMesh = SphereMesh.new()
@@ -352,12 +367,15 @@ func _despawn_loot(loot: Node3D) -> void:
 	loot.set_meta("motion_slowing", false)
 	var rigid_loot: RigidBody3D = loot as RigidBody3D
 	if rigid_loot != null:
+		rigid_loot.collision_layer = 0
+		rigid_loot.collision_mask = 0
 		rigid_loot.linear_velocity = Vector3.ZERO
 		rigid_loot.angular_velocity = Vector3.ZERO
 		rigid_loot.linear_damp = LOOT_BASE_LINEAR_DAMP
 		rigid_loot.angular_damp = LOOT_BASE_ANGULAR_DAMP
 		rigid_loot.freeze = true
 		rigid_loot.sleeping = true
+	_set_loot_collision_enabled(loot, false)
 
 func _is_loot_active(node: Node) -> bool:
 	if node == null:
@@ -373,6 +391,8 @@ func _apply_game_config() -> void:
 func _activate_loot_physics(rigid_loot: RigidBody3D) -> void:
 	if rigid_loot == null:
 		return
+	rigid_loot.collision_layer = LOOT_COLLISION_LAYER
+	rigid_loot.collision_mask = LOOT_COLLISION_MASK
 	rigid_loot.linear_damp = LOOT_BASE_LINEAR_DAMP
 	rigid_loot.angular_damp = LOOT_BASE_ANGULAR_DAMP
 	rigid_loot.freeze = false
@@ -439,6 +459,20 @@ func _update_active_loot_physics() -> void:
 			loot.set_meta("motion_slowing", true)
 			rigid_loot.linear_damp = LOOT_SLOW_LINEAR_DAMP
 			rigid_loot.angular_damp = LOOT_SLOW_ANGULAR_DAMP
+
+func _set_loot_collision_enabled(loot: Node3D, enabled: bool) -> void:
+	if loot == null:
+		return
+	var stack: Array[Node] = [loot]
+	while not stack.is_empty():
+		var current: Node = stack.pop_back()
+		var collision_shape: CollisionShape3D = current as CollisionShape3D
+		if collision_shape != null:
+			collision_shape.disabled = not enabled
+		for child_variant in current.get_children():
+			var child: Node = child_variant as Node
+			if child != null:
+				stack.append(child)
 
 func _is_loot_on_settle_surface(rigid_loot: RigidBody3D) -> bool:
 	if rigid_loot == null:
